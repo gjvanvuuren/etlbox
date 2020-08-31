@@ -10,7 +10,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Returns the content of the etl.Log table as a JSON string.
     /// </summary>
-    public class GetLogAsJSONTask : GenericTask, ITask
+    public class GetLogAsJSONTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Get log as JSON for {LoadProcessKey}";
@@ -73,7 +73,7 @@ namespace ETLBox.Logging
         {
             get
             {
-                return _loadProcessKey ?? ControlFlow.ControlFlow.CurrentLoadProcess?.Id;
+                return _loadProcessKey ?? Logging.CurrentLoadProcess?.Id;
             }
             set
             {

@@ -10,7 +10,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Reads data from the etl.Log table.
     /// </summary>
-    public class ReadLogTableTask : GenericTask, ITask
+    public class ReadLogTableTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Read all log entries for {LoadProcessId ?? 0 }";
@@ -40,12 +40,12 @@ namespace ETLBox.Logging
         }
 
         /* Public properties */
-        public long? _loadProcessId;
+        long? _loadProcessId;
         public long? LoadProcessId
         {
             get
             {
-                return _loadProcessId ?? ControlFlow.ControlFlow.CurrentLoadProcess?.Id;
+                return _loadProcessId ?? Logging.CurrentLoadProcess?.Id;
             }
             set
             {
@@ -65,9 +65,10 @@ namespace ETLBox.Logging
 SELECT {QB}id{QE}, {QB}log_date{QE}, {QB}level{QE}, {QB}message{QE}, {QB}task_type{QE}, {QB}task_action{QE}, {QB}task_hash{QE}, {QB}stage{QE}, {QB}source{QE}, {QB}load_process_id{QE}
 FROM { TN.QuotatedFullName}" +
             (LoadProcessId != null ? $@" WHERE {QB}LoadProcessKey{QE} = {LoadProcessId}"
-            : "");
+            : "")
+            + $@" ORDER BY {QB}id{QE}";
 
-        ObjectNameDescriptor TN => new ObjectNameDescriptor(ControlFlow.ControlFlow.LogTable, QB, QE);
+        ObjectNameDescriptor TN => new ObjectNameDescriptor(Logging.LogTable, QB, QE);
 
         public ReadLogTableTask()
         {

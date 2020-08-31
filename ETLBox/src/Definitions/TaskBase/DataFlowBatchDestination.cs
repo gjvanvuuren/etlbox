@@ -5,8 +5,10 @@ using System.Threading.Tasks.Dataflow;
 
 namespace ETLBox.DataFlow
 {
-    public abstract class DataFlowBatchDestination<TInput> : DataFlowDestination<TInput[]>, ITask, IDataFlowBatchDestination<TInput>
+    public abstract class DataFlowBatchDestination<TInput> : DataFlowComponent,  IDataFlowBatchDestination<TInput>, IDataFlowDestination<TInput>
     {
+        #region Public properties
+
         /// <summary>
         /// This function is called every time before a batch is inserted into the destination.
         /// It receives an array that represents the batch - you can modify the data itself if needed.
@@ -20,54 +22,37 @@ namespace ETLBox.DataFlow
         /// <summary>
         /// The buffer component used as target for linking.
         /// </summary>
-        public new ITargetBlock<TInput> TargetBlock => Buffer;
+        public ITargetBlock<TInput> TargetBlock => Buffer;
         /// <summary>
         /// The batch size defines how many records needs to be in the Input buffer before data is written into the destination.
         /// The default batch size is 1000.
         /// </summary>
-        public int BatchSize
-        {
-            get { return batchSize; }
-            set
-            {
-                batchSize = value;
-                InitBufferObjects();
-            }
-        }
-        private int batchSize;
+        public int BatchSize { get; set; } = DEFAULT_BATCH_SIZE;
 
         public const int DEFAULT_BATCH_SIZE = 1000;
 
-        protected bool WasInitialized { get; set; }
+        #endregion
 
-        /// <summary>
-        /// Use this method if you want to register a task that needs to be completed
-        /// before the destination itself can complete. Normally you don't have to do anything -
-        /// all linked components will automatically register using this method.
-        /// Simple use the LinkTo() method of source components or transformations.
-        /// </summary>
-        /// <param name="completion">A task to wait for before this destination can complete.</param>
-        public new void AddPredecessorCompletion(Task completion)
+        #region Implement abstract methods
+
+        public void Wait() => Completion.Wait();
+
+        protected ActionBlock<TInput[]> TargetAction { get; set; }
+
+        internal override Task BufferCompletion => TargetAction.Completion;
+
+        internal override void CompleteBufferOnPredecessorCompletion()
         {
-            PredecessorCompletions.Add(completion);
-            completion.ContinueWith(t => CheckCompleteAction());
+
+            TargetBlock.Complete();
         }
 
-        protected new void CheckCompleteAction()
-        {
-            Task.WhenAll(PredecessorCompletions).ContinueWith(t =>
-            {
-                if (!TargetBlock.Completion.IsCompleted)
-                {
-                    if (t.IsFaulted) TargetBlock.Fault(t.Exception.InnerException);
-                    else TargetBlock.Complete();
-                }
-            });
-        }
+        internal override void FaultBufferOnPredecessorCompletion(Exception e) => TargetBlock.Fault(e);
 
-        protected BatchBlock<TInput> Buffer { get; set; }
+        public IDataFlowSource<ETLBoxError> LinkErrorTo(IDataFlowDestination<ETLBoxError> target)
+            => InternalLinkErrorTo(target);
 
-        protected override void InitBufferObjects()
+        protected override void InternalInitBufferObjects()
         {
             Buffer = new BatchBlock<TInput>(BatchSize, new GroupingDataflowBlockOptions()
             {
@@ -81,34 +66,46 @@ namespace ETLBox.DataFlow
                 MaxDegreeOfParallelism = 1, //No parallel inserts on Db!
                 BoundedCapacity = boundedCapacity
             });
-            SetCompletionTask();
             Buffer.LinkTo(TargetAction, new DataflowLinkOptions() { PropagateCompletion = true });
         }
 
+        protected override void CleanUpOnSuccess()
+        {
+            FinishWrite();
+            NLogFinishOnce();
+        }
+        protected override void CleanUpOnFaulted(Exception e)
+        {
+            FinishWrite();
+        }
+
+        #endregion
+
+        #region Implementation
+
+        protected bool WasWritingPrepared { get; set; }
+
+        protected BatchBlock<TInput> Buffer { get; set; }
+
         protected void WriteBatch(TInput[] data)
         {
-            if (ProgressCount == 0) NLogStart();
+            if (ProgressCount == 0) NLogStartOnce();
             if (BeforeBatchWrite != null)
                 data = BeforeBatchWrite.Invoke(data);
-            if (!WasInitialized)
+            if (!WasWritingPrepared)
             {
                 PrepareWrite();
-                WasInitialized = true;
+                WasWritingPrepared = true;
             }
             TryBulkInsertData(data);
             LogProgressBatch(data.Length);
             AfterBatchWrite?.Invoke(data);
         }
 
-        protected override void CleanUp()
-        {
-            FinishWrite();
-            base.CleanUp();
-        }
-
         protected abstract void PrepareWrite();
         protected abstract void TryBulkInsertData(TInput[] data);
         protected abstract void FinishWrite();
 
+        #endregion
     }
 }

@@ -6,64 +6,38 @@ using System.Threading.Tasks.Dataflow;
 
 namespace ETLBox.DataFlow
 {
-    public abstract class DataFlowDestination<TInput> : DataFlowTask, ITask, IDataFlowDestination<TInput>
+    public abstract class DataFlowDestination<TInput> : DataFlowComponent, IDataFlowDestination<TInput>
     {
-        public Action OnCompletion { get; set; }
-        public Task Completion { get; protected set; }
+        #region Public properties
+        /// <inheritdoc/>
+
         public ITargetBlock<TInput> TargetBlock => TargetAction;
-        public virtual void Wait() => Completion.Wait();
 
-        protected ActionBlock<TInput> TargetAction { get; set; }
-        protected List<Task> PredecessorCompletions { get; set; } = new List<Task>();
-        public ErrorHandler ErrorHandler { get; set; } = new ErrorHandler();
+        /// <summary>
+        /// Waits for the completion of the component.
+        /// </summary>
+        public void Wait() => Completion.Wait();
 
-        public void AddPredecessorCompletion(Task completion)
-        {
-            PredecessorCompletions.Add(completion);
-            completion.ContinueWith(t => CheckCompleteAction());
-        }
+        #endregion
 
-        public void LinkErrorTo(IDataFlowLinkTarget<ETLBoxError> target)
-             => ErrorHandler.LinkErrorTo(target, TargetAction.Completion);
+        #region Buffer handling
+        protected virtual ActionBlock<TInput> TargetAction { get; set; }
 
-        protected void CheckCompleteAction()
-        {
-            Task.WhenAll(PredecessorCompletions).ContinueWith(t =>
-            {
-                if (!TargetBlock.Completion.IsCompleted)
-                {
-                    if (t.IsFaulted) TargetBlock.Fault(t.Exception.InnerException);
-                    else TargetBlock.Complete();
-                }
-            });
-        }
+        internal override Task BufferCompletion => TargetBlock.Completion;
 
-        protected void SetCompletionTask() => Completion = AwaitCompletion();
+        internal override void CompleteBufferOnPredecessorCompletion() => TargetBlock.Complete();
 
-        protected virtual async Task AwaitCompletion()
-        {
-            try
-            {
-                await TargetAction.Completion.ConfigureAwait(false);
-            }
-            catch (AggregateException ae)
-            {
-                throw ae.InnerException;
-            }
-            catch (Exception e)
-            {
-                throw e;
-            }
-            finally
-            {
-                CleanUp();
-            }
-        }
+        internal override void FaultBufferOnPredecessorCompletion(Exception e) => TargetBlock.Fault(e);
 
-        protected virtual void CleanUp()
-        {
-            OnCompletion?.Invoke();
-            NLogFinish();
-        }
+        #endregion
+
+        /// <summary>
+        /// If an error occurs in the component, by default the component will throw an exception and stop execution.
+        /// If you use the error linking, any erroneous records will catched and redirected.
+        /// </summary>
+        /// <param name="target">The target for erroneous rows.</param>
+        /// <returns>The linked component.</returns>
+        public IDataFlowSource<ETLBoxError> LinkErrorTo(IDataFlowDestination<ETLBoxError> target)
+            => InternalLinkErrorTo(target);
     }
 }

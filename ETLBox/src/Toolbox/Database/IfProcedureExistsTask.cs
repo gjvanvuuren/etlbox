@@ -6,7 +6,7 @@ namespace ETLBox.ControlFlow.Tasks
     /// <summary>
     /// Checks if a procedure exists.
     /// </summary>
-    public class IfProcedureExistsTask : IfExistsTask, ITask
+    public class IfProcedureExistsTask : IfExistsTask
     {
         internal override string GetSql()
         {
@@ -69,7 +69,19 @@ AND ( object_name = '{ON.UnquotatedFullName}'
         }
 
 
+        /// <summary>
+        /// Ćhecks if the procedure exists
+        /// </summary>
+        /// <param name="procedureName">The procedure name that you want to check for existence</param>
+        /// <returns>True if the procedure exists</returns>
         public static bool IsExisting(string procedureName) => new IfProcedureExistsTask(procedureName).Exists();
+
+        /// <summary>
+        /// Ćhecks if the procedure exists
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
+        /// <param name="procedureName">The procedure name that you want to check for existence</param>
+        /// <returns>True if the procedure exists</returns>
         public static bool IsExisting(IConnectionManager connectionManager, string procedureName)
             => new IfProcedureExistsTask(procedureName) { ConnectionManager = connectionManager }.Exists();
 

@@ -19,10 +19,14 @@ namespace ETLBox.ControlFlow.Tasks
     /// });
     /// </code>
     /// </example>
-    public class CreateTableTask : GenericTask, ITask
+    public class CreateTableTask : ControlFlowTask
     {
-        /* ITask Interface */
+        /// <inheritdoc />
         public override string TaskName => $"Create table {TableName}";
+
+        /// <summary>
+        /// Executes the table creation.
+        /// </summary>
         public void Execute()
         {
             CheckTableDefinition();
@@ -32,25 +36,61 @@ namespace ETLBox.ControlFlow.Tasks
                 new SqlTask(this, Sql).ExecuteNonQuery();
         }
 
-        /* Public properties */
+        /// <summary>
+        /// Executes the table creation
+        /// </summary>
         public void Create() => Execute();
+
+        /// <summary>
+        /// The table definition for the table that should be created. Either use the TableDefinition or a combination of
+        /// <see cref="TableName"/> and <see cref="TableColumn"/>.
+        /// </summary>
         public TableDefinition TableDefinition { get; set; } = new TableDefinition();
 
+        /// <summary>
+        /// The formatted table name
+        /// </summary>
         public ObjectNameDescriptor TN => new ObjectNameDescriptor(TableName, QB, QE);
+
+        /// <summary>
+        /// The list of columns to create. Either use the <see cref="TableDefinition"/> or a combination of
+        /// <see cref="TableName"/> and <see cref="TableColumn"/>.
+        /// </summary>
         public List<TableColumn> Columns
         {
             get => TableDefinition.Columns;
             set => TableDefinition.Columns = value;
         }
+
+        /// <summary>
+        /// The name of the table to create.
+        /// </summary>
         public string TableName
         {
             get => TableDefinition.Name;
             set => TableDefinition.Name = value;
         }
+
+        /// <summary>
+        /// A data type converter that is used to remap the current data type names in the TableDefintion
+        /// to other, database specific type names. E.g. you can remap that the type VARCHAR(8000) is created as TEXT.
+        /// </summary>
         public IDataTypeConverter DataTypeConverter { get; set; } = new DataTypeConverter();
+
+        /// <summary>
+        /// Set to true if you want an exception to be thrown when the table doesn't exists.
+        /// By default the table won't be changed if it already exists.
+        /// </summary>
         public bool ThrowErrorIfTableExists { get; set; }
+
+        /// <summary>
+        /// When creating the CREATE TABLE sql, ignore the Collation definition that a <see cref="TableColumn"/> potentially has.
+        /// </summary>
         public bool IgnoreCollation { get; set; }
 
+        /// <summary>
+        /// The sql code that is used to create the table.
+        /// </summary>
         public string Sql
         {
             get
@@ -78,9 +118,32 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             TableDefinition = tableDefinition;
         }
 
+        /// <summary>
+        /// Creates a table.
+        /// </summary>
+        /// <param name="tableName">The name of the table</param>
+        /// <param name="columns">The columsn of the table</param>
         public static void Create(string tableName, List<TableColumn> columns) => new CreateTableTask(tableName, columns).Execute();
+
+        /// <summary>
+        /// Creates a table.
+        /// </summary>
+        /// <param name="tableDefinition">The definition of the table containing table name and columns.</param>
         public static void Create(TableDefinition tableDefinition) => new CreateTableTask(tableDefinition).Execute();
+
+        /// <summary>
+        /// Creates a table.
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
+        /// <param name="tableName">The name of the table</param>
+        /// <param name="columns">The columsn of the table</param>
         public static void Create(IConnectionManager connectionManager, string tableName, List<TableColumn> columns) => new CreateTableTask(tableName, columns) { ConnectionManager = connectionManager }.Execute();
+
+        /// <summary>
+        /// Creates a table.
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
+        /// <param name="tableDefinition">The definition of the table containing table name and columns.</param>
         public static void Create(IConnectionManager connectionManager, TableDefinition tableDefinition) => new CreateTableTask(tableDefinition) { ConnectionManager = connectionManager }.Execute();
 
         string ColumnsDefinitionSql
@@ -99,7 +162,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
         }
 
         string PrimaryKeySql => CreatePrimaryKeyConstraint();
-        string CreateTableDefinition(ITableColumn col)
+        string CreateTableDefinition(TableColumn col)
         {
             string dataType = string.Empty;
             dataType = CreateDataTypeSql(col);
@@ -112,7 +175,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             return $@"{QB}{col.Name}{QE} {dataType} {collationSql} {defaultSql} {identitySql} {nullSql} {computedColumnSql} {comment}";
         }
 
-        private string CreateDataTypeSql(ITableColumn col)
+        private string CreateDataTypeSql(TableColumn col)
         {
             if (ConnectionType == ConnectionManagerType.SqlServer && col.HasComputedColumn)
                 return string.Empty;
@@ -122,7 +185,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
                 return DataTypeConverter.TryConvertDbDataType(col.DataType, this.ConnectionType);
         }
 
-        private string CreateIdentitySql(ITableColumn col)
+        private string CreateIdentitySql(TableColumn col)
         {
             if (ConnectionType == ConnectionManagerType.SQLite) return string.Empty;
             else
@@ -144,7 +207,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             }
         }
 
-        private string CreateNotNullSql(ITableColumn col)
+        private string CreateNotNullSql(TableColumn col)
         {
             string nullSql = string.Empty;
             if (ConnectionType == ConnectionManagerType.Postgres && col.IsIdentity) return string.Empty;
@@ -156,7 +219,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             return nullSql;
         }
 
-        private string CreateCollationSql(ITableColumn col)
+        private string CreateCollationSql(TableColumn col)
         {
             if (IgnoreCollation)
                 return string.Empty;
@@ -183,7 +246,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             return result;
         }
 
-        private string CreateDefaultSql(ITableColumn col)
+        private string CreateDefaultSql(TableColumn col)
         {
             string defaultSql = string.Empty;
             if (!col.IsPrimaryKey)
@@ -191,7 +254,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
             return defaultSql;
         }
 
-        private string CreateComputedColumnSql(ITableColumn col)
+        private string CreateComputedColumnSql(TableColumn col)
         {
             if (col.HasComputedColumn && !DbConnectionManager.SupportComputedColumns)
                 throw new ETLBoxNotSupportedException("Computed columns are not supported.");
@@ -202,7 +265,7 @@ $@"CREATE TABLE {TN.QuotatedFullName} (
                 return string.Empty;
         }
 
-        private string CreateCommentSql(ITableColumn col)
+        private string CreateCommentSql(TableColumn col)
         {
             if (ConnectionType == ConnectionManagerType.MySql && !string.IsNullOrWhiteSpace(col.Comment))
                 return $"COMMENT '{col.Comment}'";

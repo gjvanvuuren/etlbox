@@ -10,7 +10,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Starts a load process.
     /// </summary>
-    public class StartLoadProcessTask : GenericTask, ITask
+    public class StartLoadProcessTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Start load process {ProcessName}";
@@ -47,7 +47,7 @@ namespace ETLBox.Logging
                 DisableLogging = true
             };
             rlp.Execute();
-            ControlFlow.ControlFlow.CurrentLoadProcess = rlp.LoadProcess;
+            Logging.CurrentLoadProcess = rlp.LoadProcess;
         }
 
         /* Public properties */
@@ -55,12 +55,12 @@ namespace ETLBox.Logging
         public string StartMessage { get; set; }
         public string Source { get; set; } = "ETL";
 
-        public long? _loadProcessId;
+        long? _loadProcessId;
         public long? LoadProcessId
         {
             get
             {
-                return _loadProcessId ?? ControlFlow.ControlFlow.CurrentLoadProcess?.Id;
+                return _loadProcessId ?? Logging.CurrentLoadProcess?.Id;
             }
             set
             {
@@ -76,7 +76,7 @@ namespace ETLBox.Logging
  VALUES ({PP}CurrentDate,{PP}ProcessName, {PP}StartMessage,{PP}Source, 1 )
 {LastIdSql}";
 
-        ObjectNameDescriptor TN => new ObjectNameDescriptor(ControlFlow.ControlFlow.LoadProcessTable, QB, QE);
+        ObjectNameDescriptor TN => new ObjectNameDescriptor(Logging.LoadProcessTable, QB, QE);
 
         string LastIdSql
         {

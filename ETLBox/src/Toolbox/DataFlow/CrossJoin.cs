@@ -1,8 +1,10 @@
 ﻿using ETLBox.ControlFlow;
 using ETLBox.DataFlow.Connectors;
+using ETLBox.Exceptions;
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 
@@ -10,52 +12,130 @@ namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
     /// Will cross join data from the two inputs into one output. The input for the first table will be loaded into memory before the actual
-    /// join can start. After this, every incoming row will be joined with every row of the InMemory-Table by the given function CrossJoinFunc.
-    /// The InMemory target should always have the smaller amount of data to reduce memory consumption and processing time.
+    /// join can start. After this, every incoming row will be joined with every row of the InMemory-Table by the function CrossJoinFunc.
+    /// The InMemory target should always be the target of the smaller amount of data to reduce memory consumption and processing time.
     /// </summary>
     /// <typeparam name="TInput1">Type of data for in memory input block.</typeparam>
     /// <typeparam name="TInput2">Type of data for processing input block.</typeparam>
     /// <typeparam name="TOutput">Type of output data.</typeparam>
-    public class CrossJoin<TInput1, TInput2, TOutput> : DataFlowSource<TOutput>, ITask, IDataFlowLinkSource<TOutput>
+    public class CrossJoin<TInput1, TInput2, TOutput> : DataFlowSource<TOutput>, IDataFlowTransformation<TOutput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = "Cross join data";
-        public IEnumerable<TInput1> InMemoryData => InMemoryTarget.Data;
-        public MemoryDestination<TInput1> InMemoryTarget { get; set; }
-        public CustomDestination<TInput2> PassingTarget { get; set; }
+        /// <summary>
+        /// The in-memory target of the CrossJoin. This will block processing until all data is received that is designated for this target.
+        /// Always have the smaller amount of data flown into this target.
+        /// </summary>
+        public InMemoryDestination<TInput1> InMemoryTarget { get; set; }
+        /// <summary>
+        /// Every row that the PassingTarget receives is joined with all data from the <see cref="InMemoryData"/>.
+        /// </summary>
+        public ActionJoinTarget<TInput2> PassingTarget { get; set; }
+        /// <summary>
+        /// The cross join function that describes how records from the both target can be joined.
+        /// </summary>
         public Func<TInput1, TInput2, TOutput> CrossJoinFunc { get; set; }
+        /// <inheritdoc/>
+        public override ISourceBlock<TOutput> SourceBlock => this.Buffer;
 
-        private bool WasInMemoryTableLoaded { get; set; }
+        #endregion
 
-        public override void Execute()
+        #region Join Targets
+
+        public class InMemoryDestination<TInput> : DataFlowJoinTarget<TInput>
         {
-            throw new InvalidOperationException("Execute is not supported on CrossJoins! A crossjoin will continue execution" +
-            "when the predecessing dataflow components are completed");
+            public override ITargetBlock<TInput> TargetBlock => InMemoryTarget.TargetBlock;
+            public MemoryDestination<TInput> InMemoryTarget { get; set; }
+
+            public InMemoryDestination(DataFlowComponent parent)
+            {
+                InMemoryTarget = new MemoryDestination<TInput>();
+                CreateLinkInInternalFlow(parent);
+            }
+
+            protected override void InternalInitBufferObjects()
+            {
+                InMemoryTarget.CopyLogTaskProperties(Parent);
+                InMemoryTarget.MaxBufferSize = -1;
+                InMemoryTarget.InitBufferObjects();
+            }
+
+            protected override void CleanUpOnSuccess() { }
+
+            protected override void CleanUpOnFaulted(Exception e) { }
         }
+
+        #endregion
+
+        #region Constructors
 
         public CrossJoin()
         {
-            InitBufferObjects();
+            InMemoryTarget = new InMemoryDestination<TInput1>(this);
+            PassingTarget = new ActionJoinTarget<TInput2>(this, CrossJoinData);
         }
 
-        protected override void InitBufferObjects()
-        {
-            InMemoryTarget = new MemoryDestination<TInput1>(this);
-            PassingTarget = new CustomDestination<TInput2>(this, CrossJoinData);
-            if (MaxBufferSize > 0) PassingTarget.MaxBufferSize = this.MaxBufferSize;
-            PassingTarget.OnCompletion = () => Buffer.Complete();
-        }
-
+        /// <param name="crossJoinFunc">Sets the <see cref="CrossJoinFunc"/></param>
         public CrossJoin(Func<TInput1, TInput2, TOutput> crossJoinFunc) : this()
         {
             CrossJoinFunc = crossJoinFunc;
         }
 
+        #endregion
+
+        #region Implement abstract methods and override default behaviour
+
+        protected override void InternalInitBufferObjects()
+        {
+            Buffer = new BufferBlock<TOutput>(new DataflowBlockOptions()
+            {
+                BoundedCapacity = MaxBufferSize
+            });
+        }
+
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+
+        protected BufferBlock<TOutput> Buffer { get; set; }
+        internal override Task BufferCompletion => SourceBlock.Completion;
+
+        internal override void CompleteBufferOnPredecessorCompletion()
+        {
+            InMemoryTarget.CompleteBufferOnPredecessorCompletion();
+            PassingTarget.CompleteBufferOnPredecessorCompletion();
+            Task.WaitAll(InMemoryTarget.Completion, PassingTarget.Completion);
+            Buffer.Complete();
+
+        }
+
+        internal override void FaultBufferOnPredecessorCompletion(Exception e)
+        {
+            InMemoryTarget.FaultBufferOnPredecessorCompletion(e);
+            PassingTarget.FaultBufferOnPredecessorCompletion(e);
+            ((IDataflowBlock)Buffer).Fault(e);
+        }
+
+        #endregion
+
+        #region Implementation
+
+        bool WasInMemoryTableLoaded;
+        IEnumerable<TInput1> InMemoryData => InMemoryTarget.InMemoryTarget.Data;
+
         private void CrossJoinData(TInput2 passingRow)
         {
+            NLogStartOnce();
             if (!WasInMemoryTableLoaded)
             {
-                InMemoryTarget.Wait();
+                InMemoryTarget.Completion.Wait();
                 WasInMemoryTableLoaded = true;
             }
             foreach (TInput1 inMemoryRow in InMemoryData)
@@ -67,28 +147,26 @@ namespace ETLBox.DataFlow.Transformations
                         TOutput result = CrossJoinFunc.Invoke(inMemoryRow, passingRow);
                         if (result != null)
                         {
-                            Buffer.SendAsync(result).Wait();
+                            if (!Buffer.SendAsync(result).Result)
+                                throw new ETLBoxException("Buffer already completed or faulted!", this.Exception);
                             LogProgress();
                         }
                     }
                 }
+                catch (ETLBoxException) { throw; }
                 catch (Exception e)
                 {
-                    if (!ErrorHandler.HasErrorBuffer) throw e;
-                    ErrorHandler.Send(e, string.Concat(ErrorHandler.ConvertErrorData<TInput1>(inMemoryRow), "  |--| ",
-                        ErrorHandler.ConvertErrorData<TInput2>(passingRow)));
+                    ThrowOrRedirectError(e, string.Concat(ErrorSource.ConvertErrorData<TInput1>(inMemoryRow), "  |--| ",
+                        ErrorSource.ConvertErrorData<TInput2>(passingRow)));
+                    LogProgress();
                 }
             }
-
         }
+
+        #endregion
     }
 
-    /// <summary>
-    /// Will cross join data from the two inputs into one output. The input for the first table will be loaded into memory before the actual
-    /// join can start. After this, every incoming row will be joined with every row of the InMemory-Table by the given function CrossJoinFunc.
-    /// The InMemory target should always have the smaller amount of data to reduce memory consumption and processing time.
-    /// </summary>
-    /// <typeparam name="TInput">Type of data for both inputs and output.</typeparam>
+    /// <inheritdoc/>
     public class CrossJoin<TInput> : CrossJoin<TInput, TInput, TInput>
     {
         public CrossJoin() : base()
@@ -98,12 +176,7 @@ namespace ETLBox.DataFlow.Transformations
         { }
     }
 
-    /// <summary>
-    /// Will cross join data from the two inputs into one output. The input for the first table will be loaded into memory before the actual
-    /// join can start. After this, every incoming row will be joined with every row of the InMemory-Table by the given function CrossJoinFunc.
-    /// The InMemory target should always have the smaller amount of data to reduce memory consumption and processing time.
-    /// The non generic implementation deals with a dynamic object for both inputs and output.
-    /// </summary>
+    /// <inheritdoc/>
     public class CrossJoin : CrossJoin<ExpandoObject, ExpandoObject, ExpandoObject>
     {
         public CrossJoin() : base()

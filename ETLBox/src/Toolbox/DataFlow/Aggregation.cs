@@ -1,59 +1,94 @@
 ﻿using ETLBox.ControlFlow;
+using ETLBox.Exceptions;
 using ETLBox.Helper;
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// Aggregates data by the given aggregation method.
+    /// Aggregates data by the given aggregation methods.
+    /// The aggregate is a partial-blocking transformation - only the aggregation values are stored in separate memory objects.
+    /// When all rows have been processed by the aggregation, the aggregated values are written into the output.
     /// </summary>
-    /// <typeparam name="TInput">Type of data input</typeparam>
-    /// <typeparam name="TOutput">Type of data output</typeparam>
-    public class Aggregation<TInput, TOutput> : DataFlowTransformation<TInput, TOutput>, ITask, IDataFlowTransformation<TInput, TOutput>
+    /// <typeparam name="TInput">Type of ingoing data.</typeparam>
+    /// <typeparam name="TOutput">Type of outgoing data.</typeparam>
+    public class Aggregation<TInput, TOutput> : DataFlowTransformation<TInput, TOutput>
     {
-        /* ITask Interface */
-        public override string TaskName { get; set; } = "Execute aggregation block.";
+        #region Public properties
 
-        /* Public Properties */
+        /// <inheritdoc/>
+        public override string TaskName { get; set; } = "Execute aggregation block";
+
+        /// <summary>
+        /// This action describes how the input data is aggregated
+        /// </summary>
         public Action<TInput, TOutput> AggregationAction { get; set; }
 
+        /// <summary>
+        /// This Func defines the aggregation level for the input data
+        /// </summary>
         public Func<TInput, object> GroupingFunc { get; set; }
+
+        /// <summary>
+        /// This action will store the result of the aggregation from the input in the output object
+        /// </summary>
         public Action<object, TOutput> StoreKeyAction { get; set; }
+
+        /// <inheritdoc/>
         public override ISourceBlock<TOutput> SourceBlock => OutputBuffer;
+
+        /// <inheritdoc/>
         public override ITargetBlock<TInput> TargetBlock => InputBuffer;
 
-        /* Private stuff */
-        BufferBlock<TOutput> OutputBuffer { get; set; }
-        ActionBlock<TInput> InputBuffer { get; set; }
+        #endregion
 
-        Dictionary<object, TOutput> AggregationData { get; set; } = new Dictionary<object, TOutput>();
-        AggregationTypeInfo AggTypeInfo { get; set; }
+        #region Constructors
 
         public Aggregation()
         {
             AggTypeInfo = new AggregationTypeInfo(typeof(TInput), typeof(TOutput));
-
             CheckTypeInfo();
-
-            if (AggregationAction == null && AggTypeInfo.AggregateColumns.Count > 0)
-                AggregationAction = DefineAggregationAction;
-
-            if (GroupingFunc == null && AggTypeInfo.GroupColumns.Count > 0)
-                GroupingFunc = DefineGroupingPropertyFromAttributes;
-
-            if (StoreKeyAction == null && AggTypeInfo.GroupColumns.Count > 0)
-                StoreKeyAction = DefineStoreKeyActionFromAttributes;
-
-            InitBufferObjects();
         }
 
-        protected override void InitBufferObjects()
+        /// <param name="aggregationAction">Sets the <see cref="AggregationAction"/></param>
+        public Aggregation(Action<TInput, TOutput> aggregationAction) : this()
         {
+            AggregationAction = aggregationAction;
+        }
+
+        /// <param name="aggregationAction">Sets the <see cref="AggregationAction"/></param>
+        /// <param name="groupingFunc">Sets the <see cref="GroupingFunc"/></param>
+        public Aggregation(Action<TInput, TOutput> aggregationAction, Func<TInput, object> groupingFunc)
+            : this(aggregationAction)
+        {
+            GroupingFunc = groupingFunc;
+        }
+
+        /// <param name="aggregationAction">Sets the <see cref="AggregationAction"/></param>
+        /// <param name="groupingFunc">Sets the <see cref="GroupingFunc"/></param>
+        /// <param name="storeKeyAction">Sets the <see cref="StoreKeyAction"/></param>
+        public Aggregation(Action<TInput, TOutput> aggregationAction, Func<TInput, object> groupingFunc, Action<object, TOutput> storeKeyAction)
+            : this(aggregationAction, groupingFunc)
+        {
+            StoreKeyAction = storeKeyAction;
+        }
+
+        #endregion
+
+        #region Implement abstract methods
+
+        internal override Task BufferCompletion => SourceBlock.Completion;
+
+        protected override void InternalInitBufferObjects()
+        {
+            SetAggregationFunctionsIfNecessary();
+
             OutputBuffer = new BufferBlock<TOutput>(new DataflowBlockOptions()
             {
                 BoundedCapacity = MaxBufferSize
@@ -67,6 +102,7 @@ namespace ETLBox.DataFlow.Transformations
                 if (t.IsFaulted) ((IDataflowBlock)OutputBuffer).Fault(t.Exception.InnerException);
                 try
                 {
+                    NLogStartOnce();
                     WriteIntoOutput();
                     OutputBuffer.Complete();
                 }
@@ -78,27 +114,42 @@ namespace ETLBox.DataFlow.Transformations
             });
         }
 
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        internal override void CompleteBufferOnPredecessorCompletion() => TargetBlock.Complete();
+
+        internal override void FaultBufferOnPredecessorCompletion(Exception e) => TargetBlock.Fault(e);
+
+        #endregion
+
+        #region Implementation
+
+        BufferBlock<TOutput> OutputBuffer;
+        ActionBlock<TInput> InputBuffer;
+        Dictionary<object, TOutput> AggregationData = new Dictionary<object, TOutput>();
+        AggregationTypeInfo AggTypeInfo;
+
         private void CheckTypeInfo()
         {
             if (AggTypeInfo.IsArrayOutput)
                 throw new Exception("Aggregation target must be of an object or dynamic type! Array types are not allowed.");
         }
 
-        public Aggregation(Action<TInput, TOutput> aggregationAction) : this()
+        private void SetAggregationFunctionsIfNecessary()
         {
-            AggregationAction = aggregationAction;
-        }
+            if (AggregationAction == null && AggTypeInfo.AggregateColumns.Count > 0)
+                AggregationAction = DefineAggregationAction;
 
-        public Aggregation(Action<TInput, TOutput> aggregationAction, Func<TInput, object> groupingFunc)
-            : this(aggregationAction)
-        {
-            GroupingFunc = groupingFunc;
-        }
+            if (GroupingFunc == null && AggTypeInfo.GroupColumns.Count > 0)
+                GroupingFunc = DefineGroupingPropertyFromAttributes;
 
-        public Aggregation(Action<TInput, TOutput> aggregationAction, Func<TInput, object> groupingFunc, Action<object, TOutput> storeKeyAction)
-            : this(aggregationAction, groupingFunc)
-        {
-            StoreKeyAction = storeKeyAction;
+            if (StoreKeyAction == null && AggTypeInfo.GroupColumns.Count > 0)
+                StoreKeyAction = DefineStoreKeyActionFromAttributes;
         }
 
         private void DefineAggregationAction(TInput inputrow, TOutput aggOutput)
@@ -149,17 +200,6 @@ namespace ETLBox.DataFlow.Transformations
                 gk?.GroupingObjectsByProperty.Add(propMap.PropInOutput, propMap.PropInInput.GetValue(inputrow));
             return gk;
         }
-        private void WriteIntoOutput()
-        {
-            NLogStart();
-            foreach (var row in AggregationData)
-            {
-                StoreKeyAction?.Invoke(row.Key, row.Value);
-                OutputBuffer.SendAsync(row.Value).Wait();
-                LogProgress();
-            }
-            NLogFinish();
-        }
 
         private void WrapAggregationAction(TInput row)
         {
@@ -170,14 +210,24 @@ namespace ETLBox.DataFlow.Transformations
 
             TOutput currentAgg = AggregationData[key];
             AggregationAction.Invoke(row, currentAgg);
-
         }
 
         private void AddRecordToDict(object key)
         {
-            TOutput firstEntry = default(TOutput);
+            TOutput firstEntry = default;
             firstEntry = (TOutput)Activator.CreateInstance(typeof(TOutput));
             AggregationData.Add(key, firstEntry);
+        }
+
+        private void WriteIntoOutput()
+        {
+            foreach (var row in AggregationData)
+            {
+                StoreKeyAction?.Invoke(row.Key, row.Value);
+                if (!OutputBuffer.SendAsync(row.Value).Result)
+                    throw new ETLBoxException("Buffer already completed or faulted!", this.Exception);
+                LogProgress();
+            }
         }
 
         class GroupingKey
@@ -203,6 +253,8 @@ namespace ETLBox.DataFlow.Transformations
             }
             public Dictionary<PropertyInfo, object> GroupingObjectsByProperty { get; set; } = new Dictionary<PropertyInfo, object>();
         }
+
+        #endregion
     }
 
     public enum AggregationMethod
@@ -213,11 +265,7 @@ namespace ETLBox.DataFlow.Transformations
         Count
     }
 
-    /// <summary>
-    /// Aggregates data by the given aggregation method.
-    /// The non generic implementation uses dynamic objects.
-    /// </summary>
-    /// <see cref="Aggregation{TInput, TOutput}"/>
+    /// <inheritdoc />
     public class Aggregation : Aggregation<ExpandoObject, ExpandoObject>
     {
         public Aggregation(Action<ExpandoObject, ExpandoObject> aggregationAction) : base(aggregationAction)

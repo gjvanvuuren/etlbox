@@ -10,7 +10,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Will set the table entry for current load process to aborted.
     /// </summary>
-    public class AbortLoadProcessTask : GenericTask, ITask
+    public class AbortLoadProcessTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Abort process with key {LoadProcessId}";
@@ -29,16 +29,15 @@ namespace ETLBox.Logging
                 DisableLogging = true,
             };
             rlp.Execute();
-            ControlFlow.ControlFlow.CurrentLoadProcess = rlp.LoadProcess;
+            Logging.CurrentLoadProcess = rlp.LoadProcess;
         }
 
-        /* Public properties */
-        public long? _loadProcessId;
+        long? _loadProcessId;
         public long? LoadProcessId
         {
             get
             {
-                return _loadProcessId ?? ControlFlow.ControlFlow.CurrentLoadProcess?.Id;
+                return _loadProcessId ?? Logging.CurrentLoadProcess?.Id;
             }
             set
             {
@@ -57,7 +56,7 @@ namespace ETLBox.Logging
   , {QB}abort_message{QE} = {PP}AbortMessage
   WHERE {QB}id{QE} = {PP}LoadProcessId
 ";
-        ObjectNameDescriptor TN => new ObjectNameDescriptor(ControlFlow.ControlFlow.LoadProcessTable, QB, QE);
+        ObjectNameDescriptor TN => new ObjectNameDescriptor(Logging.LoadProcessTable, QB, QE);
 
         public AbortLoadProcessTask()
         {

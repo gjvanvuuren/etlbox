@@ -6,7 +6,7 @@ using System.Linq;
 
 namespace ETLBox.ControlFlow
 {
-    public abstract class DbTask : GenericTask
+    public abstract class DbTask : ControlFlowTask
     {
 
         /* Public Properties */
@@ -44,29 +44,29 @@ namespace ETLBox.ControlFlow
 
         }
 
-        public DbTask(string name) : this()
+        public DbTask(string sql) : this()
+        {
+            this.Sql = sql;
+        }
+
+        public DbTask(string name, string sql) : this(sql)
         {
             this.TaskName = name;
         }
 
-        public DbTask(string name, string sql) : this(name)
+        public DbTask(ControlFlowTask callingTask, string sql) : this(sql)
         {
-            this.Sql = sql;
+            CopyLogTaskProperties(callingTask);
+            this.ConnectionManager = callingTask.ConnectionManager;
         }
 
-        public DbTask(ITask callingTask, string sql)
-        {
-            this.Sql = sql;
-            CopyTaskProperties(callingTask);
-        }
-
-        public DbTask(string name, string sql, params Action<object>[] actions) : this(name, sql)
+        public DbTask(string sql, params Action<object>[] actions) : this(sql)
         {
             Actions = actions.ToList();
         }
 
 
-        public DbTask(string name, string sql, Action beforeRowReadAction, Action afterRowReadAction, params Action<object>[] actions) : this(name, sql)
+        public DbTask(string sql, Action beforeRowReadAction, Action afterRowReadAction, params Action<object>[] actions) : this(sql, actions)
         {
             BeforeRowReadAction = beforeRowReadAction;
             AfterRowReadAction = afterRowReadAction;
@@ -213,18 +213,18 @@ namespace ETLBox.ControlFlow
 
         void LoggingStart(LogType logType = LogType.None)
         {
-            NLogger.Info(TaskName, TaskType, "START", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.Id);
+            NLogger.Info(TaskName, TaskType, "START", TaskHash, Logging.Logging.STAGE, Logging.Logging.CurrentLoadProcess?.Id);
             if (logType == LogType.Bulk)
-                NLogger.Debug($"SQL Bulk Insert", TaskType, "RUN", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.Id);
+                NLogger.Debug($"SQL Bulk Insert", TaskType, "RUN", TaskHash, Logging.Logging.STAGE, Logging.Logging.CurrentLoadProcess?.Id);
             else
-                NLogger.Debug($"{Command}", TaskType, "RUN", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.Id);
+                NLogger.Debug($"{Command}", TaskType, "RUN", TaskHash, Logging.Logging.STAGE, Logging.Logging.CurrentLoadProcess?.Id);
         }
 
         void LoggingEnd(LogType logType = LogType.None)
         {
-            NLogger.Info(TaskName, TaskType, "END", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.Id);
+            NLogger.Info(TaskName, TaskType, "END", TaskHash, Logging.Logging.STAGE, Logging.Logging.CurrentLoadProcess?.Id);
             if (logType == LogType.Rows)
-                NLogger.Debug($"Rows affected: {RowsAffected ?? 0}", TaskType, "RUN", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.Id);
+                NLogger.Debug($"Rows affected: {RowsAffected ?? 0}", TaskType, "RUN", TaskHash, Logging.Logging.STAGE, Logging.Logging.CurrentLoadProcess?.Id);
         }
     }
 }

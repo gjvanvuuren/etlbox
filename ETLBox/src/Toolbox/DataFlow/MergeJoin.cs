@@ -1,4 +1,5 @@
 ﻿using ETLBox.ControlFlow;
+using ETLBox.Exceptions;
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
@@ -9,129 +10,198 @@ using System.Threading.Tasks.Dataflow;
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// Will join data from the two inputs into one output - on a row by row base. Make sure both inputs are sorted or in the right order.
+    /// Will join data from the two inputs into one output. Make sure both inputs are sorted or in the right order.
+    /// Each row from the left join target will be merged with a row from the right join target.
+    /// If the amount of ingoing data is unevenly distributed, the last rows will be joined with null values.
+    ///
+    /// You can define a match condition that let you only merge matching records. This will change the
+    /// match behavior a little bit.
+    /// By assuming that the intput is sorted, not matching records will be joined with null then. This
+    /// can be compared with a left or right join.
     /// </summary>
-    /// <typeparam name="TInput1">Type of data for input block one.</typeparam>
-    /// <typeparam name="TInput2">Type of data for input block two.</typeparam>
-    /// <typeparam name="TOutput">Type of output data.</typeparam>
+    /// <typeparam name="TInput1">Type of ingoing data for the left join target.</typeparam>
+    /// <typeparam name="TInput2">Type of ingoing data for the right join target.</typeparam>
+    /// <typeparam name="TOutput">Type of outgoing data.</typeparam>
     /// <example>
     /// <code>
     /// MergeJoin&lt;MyDataRow1, MyDataRow2, MyDataRow1&gt; join = new MergeJoin&lt;MyDataRow1, MyDataRow2, MyDataRow1&gt;(Func&lt;TInput1, TInput2, TOutput&gt; mergeJoinFunc);
-    /// source1.LinkTo(join.Target1);;
-    /// source2.LinkTo(join.Target2);;
+    /// source1.LinkTo(join.LeftJoinTarget);
+    /// source2.LinkTo(join.RightJoinTarget);
     /// join.LinkTo(dest);
     /// </code>
     /// </example>
-    public class MergeJoin<TInput1, TInput2, TOutput> : DataFlowTask, ITask, IDataFlowLinkSource<TOutput>
+    public class MergeJoin<TInput1, TInput2, TOutput> : DataFlowSource<TOutput>, IDataFlowTransformation<TOutput>
     {
-        private Func<TInput1, TInput2, TOutput> _mergeJoinFunc;
+        #region Public properties
 
-        /* ITask Interface */
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = "Merge and join data";
+        /// <summary>
+        /// The left target of the merge join. Use this to link your source component with.
+        /// </summary>
+        public ActionJoinTarget<TInput1> LeftJoinTarget { get; set; }
+        /// <summary>
+        /// The right target of the merge join. Use this to link your source component with.
+        /// </summary>
+        public ActionJoinTarget<TInput2> RightJoinTarget { get; set; }
+        /// <inheritdoc/>
+        public override ISourceBlock<TOutput> SourceBlock => this.Buffer;
+        /// <summary>
+        /// The func that describes how both records from the left and right join target can be joined.
+        /// </summary>
+        public Func<TInput1, TInput2, TOutput> MergeJoinFunc { get; set; }
+        /// <summary>
+        /// Define if records should only be joined if the match. Return true if both records do match
+        /// and should be joined.
+        /// </summary>
+        public Func<TInput1, TInput2, bool> BothMatchFunc { get; set; }
 
-        /* Public Properties */
-        public MergeJoinTarget<TInput1> Target1 { get; set; }
-        public MergeJoinTarget<TInput2> Target2 { get; set; }
-        public ISourceBlock<TOutput> SourceBlock => Transformation.SourceBlock;
+        #endregion
 
-        public Func<TInput1, TInput2, TOutput> MergeJoinFunc
-        {
-            get { return _mergeJoinFunc; }
-            set
-            {
-                _mergeJoinFunc = value;
-                Transformation.TransformationFunc = new Func<Tuple<TInput1, TInput2>, TOutput>(tuple => _mergeJoinFunc.Invoke(tuple.Item1, tuple.Item2));
-                JoinBlock.LinkTo(Transformation.TargetBlock, new DataflowLinkOptions { PropagateCompletion = true });
-            }
-        }
-
-        /* Private stuff */
-        internal JoinBlock<TInput1, TInput2> JoinBlock { get; set; }
-        internal RowTransformation<Tuple<TInput1, TInput2>, TOutput> Transformation { get; set; }
+        #region Constructors
 
         public MergeJoin()
         {
-            InitBufferObjects();
-            Target1 = new MergeJoinTarget<TInput1>(this, JoinBlock.Target1);
-            Target2 = new MergeJoinTarget<TInput2>(this, JoinBlock.Target2);
+            LeftJoinTarget = new ActionJoinTarget<TInput1>(this, LeftJoinData);
+            RightJoinTarget = new ActionJoinTarget<TInput2>(this, RightJoinData);
         }
 
-        protected override void InitBufferObjects()
-        {
-            Transformation = new RowTransformation<Tuple<TInput1, TInput2>, TOutput>(this);
-            if (MaxBufferSize > 0) Transformation.MaxBufferSize = this.MaxBufferSize;
-            JoinBlock = new JoinBlock<TInput1, TInput2>(new GroupingDataflowBlockOptions()
-            {
-                BoundedCapacity = MaxBufferSize
-            });
-        }
-
+        /// <param name="mergeJoinFunc">Sets the <see cref="MergeJoinFunc"/></param>
         public MergeJoin(Func<TInput1, TInput2, TOutput> mergeJoinFunc) : this()
         {
             MergeJoinFunc = mergeJoinFunc;
         }
 
-        public MergeJoin(string name, Func<TInput1, TInput2, TOutput> mergeJoinFunc) : this(mergeJoinFunc)
+        /// <param name="mergeJoinFunc">Sets the <see cref="MergeJoinFunc"/></param>
+        /// <param name="bothMatchFunc">Sets the <see cref="BothMatchFunc"/></param>
+        public MergeJoin(Func<TInput1, TInput2, TOutput> mergeJoinFunc, Func<TInput1, TInput2, bool> bothMatchFunc) : this(mergeJoinFunc)
         {
-            this.TaskName = name;
+            BothMatchFunc = bothMatchFunc;
         }
 
-        public IDataFlowLinkSource<TOutput> LinkTo(IDataFlowLinkTarget<TOutput> target)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo(target);
+        #endregion
 
-        public IDataFlowLinkSource<TOutput> LinkTo(IDataFlowLinkTarget<TOutput> target, Predicate<TOutput> predicate)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo(target, predicate);
+        #region Implement abstract methods and override default behaviour
 
-        public IDataFlowLinkSource<TOutput> LinkTo(IDataFlowLinkTarget<TOutput> target, Predicate<TOutput> rowsToKeep, Predicate<TOutput> rowsIntoVoid)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo(target, rowsToKeep, rowsIntoVoid);
-
-        public IDataFlowLinkSource<TConvert> LinkTo<TConvert>(IDataFlowLinkTarget<TOutput> target)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo<TConvert>(target);
-
-        public IDataFlowLinkSource<TConvert> LinkTo<TConvert>(IDataFlowLinkTarget<TOutput> target, Predicate<TOutput> predicate)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo<TConvert>(target, predicate);
-
-        public IDataFlowLinkSource<TConvert> LinkTo<TConvert>(IDataFlowLinkTarget<TOutput> target, Predicate<TOutput> rowsToKeep, Predicate<TOutput> rowsIntoVoid)
-            => (new DataFlowLinker<TOutput>(this, SourceBlock)).LinkTo<TConvert>(target, rowsToKeep, rowsIntoVoid);
-
-        public void LinkErrorTo(IDataFlowLinkTarget<ETLBoxError> target) =>
-            Transformation.LinkErrorTo(target);
-    }
-
-    public class MergeJoinTarget<TInput> : GenericTask, IDataFlowDestination<TInput>
-    {
-        public ITargetBlock<TInput> TargetBlock { get; set; }
-
-        public void Wait()
+        protected override void InternalInitBufferObjects()
         {
-            TargetBlock.Completion.Wait();
-        }
-
-        public Task Completion => TargetBlock.Completion;
-
-        protected List<Task> PredecessorCompletions { get; set; } = new List<Task>();
-
-        public void AddPredecessorCompletion(Task completion)
-        {
-            PredecessorCompletions.Add(completion);
-            completion.ContinueWith(t => CheckCompleteAction());
-        }
-
-        protected void CheckCompleteAction()
-        {
-            Task.WhenAll(PredecessorCompletions).ContinueWith(t =>
+            Buffer = new BufferBlock<TOutput>(new DataflowBlockOptions()
             {
-                if (t.IsFaulted) TargetBlock.Fault(t.Exception.InnerException);
-                else TargetBlock.Complete();
+                BoundedCapacity = MaxBufferSize
             });
         }
 
-        public MergeJoinTarget(ITask parent, ITargetBlock<TInput> joinTarget)
+        protected override void CleanUpOnSuccess()
         {
-            TargetBlock = joinTarget;
-            CopyTaskProperties(parent);
+            NLogFinishOnce();
+        }
+
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        protected BufferBlock<TOutput> Buffer { get; set; }
+        internal override Task BufferCompletion => SourceBlock.Completion;
+
+        internal override void CompleteBufferOnPredecessorCompletion()
+        {
+            LeftJoinTarget.CompleteBufferOnPredecessorCompletion();
+            RightJoinTarget.CompleteBufferOnPredecessorCompletion();
+            Task.WaitAll(LeftJoinTarget.Completion, RightJoinTarget.Completion);
+            try
+            {
+                EmptyQueues();
+                Buffer.Complete();
+            }
+            catch (Exception e)
+            {
+                ((IDataflowBlock)Buffer).Fault(e);
+            }
+        }
+
+        internal override void FaultBufferOnPredecessorCompletion(Exception e)
+        {
+            LeftJoinTarget.FaultBufferOnPredecessorCompletion(e);
+            RightJoinTarget.FaultBufferOnPredecessorCompletion(e);
+            ((IDataflowBlock)Buffer).Fault(e);
+        }
+
+        #endregion
+
+        #region Implementation
+
+        private readonly object joinLock = new object();
+
+        private Queue<TInput1> dataLeft = new Queue<TInput1>();
+        private Queue<TInput2> dataRight = new Queue<TInput2>();
+        private TOutput joinOutput = default;
+
+        private void EmptyQueues()
+        {
+            lock (joinLock)
+            {
+                while (dataLeft.Count > 0 || dataRight.Count > 0)
+                {
+                    TInput1 left = default;
+                    TInput2 right = default;
+                    if (dataLeft.Count > 0)
+                        left = dataLeft.Dequeue();
+                    if (dataRight.Count > 0)
+                        right = dataRight.Dequeue();
+                    CreateOutput(left, right);
+                }
+            }
+        }
+        private void LeftJoinData(TInput1 data)
+        {
+            lock (joinLock)
+            {
+                if (dataRight.Count >= 1)
+                {
+                    var right = dataRight.Dequeue();
+                    CreateOutput(data, right);
+                }
+                else
+                {
+                    dataLeft.Enqueue(data);
+                }
+            }
+        }
+
+        private void CreateOutput(TInput1 dataLeft, TInput2 dataRight)
+        {
+            try
+            {
+                joinOutput = MergeJoinFunc.Invoke(dataLeft, dataRight);
+                if (!Buffer.SendAsync(joinOutput).Result)
+                    throw new ETLBoxException("Buffer already completed or faulted!", this.Exception);
+            }
+            catch (ETLBoxException) { throw; }
+            catch (Exception e)
+            {
+                ThrowOrRedirectError(e, "Left:" + ErrorSource.ConvertErrorData<TInput1>(dataLeft)
+                                        + "|Right:" + ErrorSource.ConvertErrorData<TInput2>(dataRight));
+            }
 
         }
+
+        private void RightJoinData(TInput2 data)
+        {
+            lock (joinLock)
+            {
+                if (dataLeft.Count >= 1)
+                {
+                    var left = dataLeft.Dequeue();
+                    CreateOutput(left, data);
+                }
+                else
+                {
+                    dataRight.Enqueue(data);
+                }
+            }
+        }
+
+        #endregion
+
     }
 
     /// <summary>
@@ -153,9 +223,6 @@ namespace ETLBox.DataFlow.Transformations
 
         public MergeJoin(Func<TInput, TInput, TInput> mergeJoinFunc) : base(mergeJoinFunc)
         { }
-
-        public MergeJoin(string name, Func<TInput, TInput, TInput> mergeJoinFunc) : base(name, mergeJoinFunc)
-        { }
     }
 
     /// <summary>
@@ -169,9 +236,6 @@ namespace ETLBox.DataFlow.Transformations
         { }
 
         public MergeJoin(Func<ExpandoObject, ExpandoObject, ExpandoObject> mergeJoinFunc) : base(mergeJoinFunc)
-        { }
-
-        public MergeJoin(string name, Func<ExpandoObject, ExpandoObject, ExpandoObject> mergeJoinFunc) : base(name, mergeJoinFunc)
         { }
     }
 }

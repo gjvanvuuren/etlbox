@@ -13,21 +13,35 @@ using TheBoxOffice.LicenseManager;
 namespace ETLBox.DataFlow.Connectors
 {
     /// <summary>
-    /// Reads data from a text file. Each line is read as a string and written into the corresponding property
-    /// identified by the ValueSelector.
-    /// A line is defined as a sequence of characters followed by a line feed("\n"), a carriage return ("\r"), or a carriage return immediately followed by a line feed("\r\n").
+    /// Reads data from a text file.
+    /// Each line is read as a string and converted into an object by the <see cref="ParseLineAction"/>.
+    /// A line is defined as a sequence of characters followed by a line feed("\n"), a carriage return ("\r"),
+    /// or a carriage return immediately followed by a line feed("\r\n").
     /// </summary>
-    public class TextSource<TOutput> : DataFlowStreamSource<TOutput>, ITask, IDataFlowSource<TOutput>
+    /// <typeparam name="TOutput">Type of outgoing data.</typeparam>
+    public class TextSource<TOutput> : DataFlowStreamSource<TOutput>, ILoggableTask, IDataFlowSource<TOutput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc />
         public override string TaskName => $"Read text data Uri: {CurrentRequestUri ?? ""}";
 
-        /* Public properties */
+        /// <summary>
+        /// Define how many rows in the file should be skipped before actually reading any data.
+        /// By default the reader start at the first line (no rows are skipped)
+        /// </summary>
         public int SkipRows { get; set; } = 0;
-        public Action<string, TOutput> WriteLineIntoObject { get; set; }
 
-        /* Private stuff */
-        TypeInfo TypeInfo { get; set; }
+        /// <summary>
+        /// This Action is called for every line in the source document.
+        /// The input is the line as as string and it expect as output the line parsed
+        /// into the desired output type of the component.
+        /// </summary>
+        public Action<string, TOutput> ParseLineAction { get; set; }
+
+        #endregion
+
+        #region Constructors
 
         public TextSource()
         {
@@ -35,11 +49,19 @@ namespace ETLBox.DataFlow.Connectors
             ResourceType = ResourceType.File;
         }
 
-        public TextSource(string uri, Action<string,TOutput> writeLineIntoObject) : this()
+        /// <param name="uri">The source of the file. This can be a filename or a web url.<see cref="Uri"/></param>
+        /// <param name="parseLineAction"><see cref="ParseLineAction"/></param>
+        public TextSource(string uri, Action<string, TOutput> parseLineAction) : this()
         {
             Uri = uri;
-            WriteLineIntoObject = writeLineIntoObject;
+            ParseLineAction = parseLineAction;
         }
+
+        #endregion
+
+        #region Implementation
+
+        TypeInfo TypeInfo { get; set; }
 
         protected override void InitReader()
         {
@@ -50,7 +72,7 @@ namespace ETLBox.DataFlow.Connectors
 
         private void VerifyProperties()
         {
-            if (WriteLineIntoObject == null)
+            if (ParseLineAction == null)
                 throw new ETLBoxException("A TextSource must have a PropertyMatch function defined!");
         }
 
@@ -60,7 +82,7 @@ namespace ETLBox.DataFlow.Connectors
                 StreamReader.ReadLine();
         }
 
-        protected override void ReadAll()
+        protected override void ReadAllRecords()
         {
             while (StreamReader.Peek() > 0)
             {
@@ -72,36 +94,36 @@ namespace ETLBox.DataFlow.Connectors
         private void ReadLineAndSendIntoBuffer()
         {
             string line = StreamReader.ReadLine();
+            TOutput newObject = default;
             try
             {
-                TOutput newObject = default(TOutput);
                 if (TypeInfo.IsArray)
                     newObject= (TOutput)Activator.CreateInstance(typeof(TOutput), new object[] { 1 });
                 else
                     newObject = (TOutput)Activator.CreateInstance(typeof(TOutput));
 
-                WriteLineIntoObject(line, newObject);
-                Buffer.SendAsync(newObject).Wait();
+                ParseLineAction(line, newObject);
+                if (!Buffer.SendAsync(newObject).Result)
+                    throw new ETLBoxException("Buffer already completed or faulted!", this.Exception);
             }
+            catch (ETLBoxException) { throw; }
             catch (Exception e)
             {
-                if (!ErrorHandler.HasErrorBuffer) throw e;
-                ErrorHandler.Send(e, line);
+                ThrowOrRedirectError(e, line);
             }
+
         }
 
         protected override void CloseReader()
         { }
+
+        #endregion
     }
 
-    /// <summary>
-    /// Reads data from a text file. Each line is read as a string and written into the corresponding property
-    /// identified by the ValueSelector. Works internall with an ExpandoObject.
-    /// A line is defined as a sequence of characters followed by a line feed("\n"), a carriage return ("\r"), or a carriage return immediately followed by a line feed("\r\n").
-    /// </summary>
+    /// <inheritdoc />
     public class TextSource : TextSource<ExpandoObject>
     {
         public TextSource() : base() { }
-        public TextSource(string fileName, Action<string,ExpandoObject> writeLineIntoObject) : base(fileName, writeLineIntoObject) { }
+        public TextSource(string fileName, Action<string,ExpandoObject> parseLineAction) : base(fileName, parseLineAction) { }
     }
 }

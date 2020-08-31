@@ -6,7 +6,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Used this task for custom log messages.
     /// </summary>
-    public class LogTask : GenericTask, ITask
+    public class LogTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Logs message";
@@ -27,12 +27,12 @@ namespace ETLBox.Logging
             Message = message;
         }
         //NLogger.Info(TaskName, TaskType, "START", TaskHash, ControlFlow.STAGE, ControlFlow.CurrentLoadProcess?.LoadProcessKey);
-        public void Trace() => NLogger?.Trace(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
-        public void Debug() => NLogger?.Debug(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
-        public void Info() => NLogger?.Info(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
-        public void Warn() => NLogger?.Warn(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
-        public void Error() => NLogger?.Error(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
-        public void Fatal() => NLogger?.Fatal(Message, TaskType, "LOG", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
+        public void Trace() => NLogger?.Trace(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
+        public void Debug() => NLogger?.Debug(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
+        public void Info() => NLogger?.Info(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
+        public void Warn() => NLogger?.Warn(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
+        public void Error() => NLogger?.Error(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
+        public void Fatal() => NLogger?.Fatal(Message, TaskType, "LOG", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
         public static void Trace(string message) => new LogTask(message).Trace();
         public static void Debug(string message) => new LogTask(message).Debug();
         public static void Info(string message) => new LogTask(message).Info();

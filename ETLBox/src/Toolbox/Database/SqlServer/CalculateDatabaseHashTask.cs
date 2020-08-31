@@ -16,10 +16,14 @@ namespace ETLBox.ControlFlow.Tasks
     /// CalculateDatabaseHashTask.Calculate(new List&lt;string&gt;() { "demo", "dbo" });
     /// </code>
     /// </example>
-    public class CalculateDatabaseHashTask : GenericTask, ITask
+    public class CalculateDatabaseHashTask : ControlFlowTask
     {
-        /* ITask Interface */
+        /// <inheritdoc/>
         public override string TaskName => $"Calculate hash value for schema(s) {SchemaNamesAsString}";
+
+        /// <summary>
+        /// Runs the sql code to execute the database hash
+        /// </summary>
         public void Execute()
         {
             if (ConnectionType != ConnectionManagerType.SqlServer)
@@ -33,15 +37,24 @@ namespace ETLBox.ControlFlow.Tasks
                 }
             }
                 .ExecuteReader();
-            DatabaseHash = HashHelper.Encrypt_Char40(String.Join("|", allColumns));
+            DatabaseHash = HashHelper.CreateChar40Hash(String.Join("|", allColumns));
         }
 
-        /* Public properties */
+        /// <summary>
+        /// List of schema names that should be included in the database hash calculation
+        /// </summary>
         public List<string> SchemaNames { get; set; }
 
+        /// <summary>
+        /// A unique hash value that can identify a database based on it's object
+        /// </summary>
         public string DatabaseHash { get; private set; }
 
         string SchemaNamesAsString => String.Join(",", SchemaNames.Select(name => $"'{name}'"));
+
+        /// <summary>
+        /// The sql code generated to calculate the database hash value
+        /// </summary>
         public string Sql => $@"
 SELECT sch.name + '.' + tbls.name + N'|' + 
 	   cols.name + N'|' + 
@@ -75,7 +88,19 @@ ORDER BY sch.name, tbls.name, cols.column_id
             return this;
         }
 
+        /// <summary>
+        /// Calculates the hash of a database based on the existing database objects (Sql Server only)
+        /// </summary>
+        /// <param name="schemaNames">List of schema names that should be included in the hash calculation</param>
+        /// <returns>A unique hash values for the schema</returns>
         public static string Calculate(List<string> schemaNames) => new CalculateDatabaseHashTask(schemaNames).Calculate().DatabaseHash;
+        /// <summary>
+        ///
+        /// Calculates the hash of a database based on the existing database objects (Sql Server only)
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
+        /// <param name="schemaNames">List of schema names that should be included in the hash calculation</param>
+        /// <returns>A unique hash values for the schema</returns>
         public static string Calculate(IConnectionManager connectionManager, List<string> schemaNames)
             => new CalculateDatabaseHashTask(schemaNames) { ConnectionManager = connectionManager }.Calculate().DatabaseHash;
 

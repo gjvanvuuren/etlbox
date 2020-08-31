@@ -11,19 +11,20 @@ namespace ETLBox.Logging
     /// update your nlog.config add add this table as database target automatically.
     /// Or you can update your nlog.config manually.
     /// </summary>
-    public class CreateLogTableTask : GenericTask, ITask
+    public class CreateLogTableTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Create default etlbox log table";
-        public string LogTableName { get; set; } = ControlFlow.ControlFlow.DEFAULTLOGTABLENAME;
+        public string LogTableName { get; set; } = Logging.DEFAULTLOGTABLENAME;
         public string Sql => LogTable.Sql;
         public CreateTableTask LogTable { get; private set; }
         public void Execute()
         {
-            LogTable.CopyTaskProperties(this);
+            LogTable.CopyLogTaskProperties(this);
+            LogTable.ConnectionManager = this.ConnectionManager;
             LogTable.DisableLogging = true;
             LogTable.Create();
-            ControlFlow.ControlFlow.LogTable = LogTableName;
+            Logging.LogTable = LogTableName;
         }
 
         public CreateLogTableTask(string logTableName)
@@ -54,8 +55,8 @@ namespace ETLBox.Logging
             LogTable = new CreateTableTask(LogTableName, columns);
         }
 
-        public static void Create(string logTableName = ControlFlow.ControlFlow.DEFAULTLOGTABLENAME) => new CreateLogTableTask(logTableName).Execute();
-        public static void Create(IConnectionManager connectionManager, string logTableName = ControlFlow.ControlFlow.DEFAULTLOGTABLENAME) => new CreateLogTableTask(connectionManager, logTableName).Execute();
+        public static void Create(string logTableName = Logging.DEFAULTLOGTABLENAME) => new CreateLogTableTask(logTableName).Execute();
+        public static void Create(IConnectionManager connectionManager, string logTableName = Logging.DEFAULTLOGTABLENAME) => new CreateLogTableTask(connectionManager, logTableName).Execute();
 
     }
 }

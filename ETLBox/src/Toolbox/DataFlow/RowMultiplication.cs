@@ -8,37 +8,46 @@ using System.Threading.Tasks.Dataflow;
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// This transformation allow you to transform your input data into multple output data records.
+    /// This transformation allow you to transform one row of your input data into multiple rows.
     /// </summary>
-    /// <typeparam name="TInput">Type of data input</typeparam>
-    /// <typeparam name="TOutput">Type of data output</typeparam>
-    public class RowMultiplication<TInput, TOutput> : DataFlowTransformation<TInput, TOutput>, ITask, IDataFlowTransformation<TInput, TOutput>
+    /// <typeparam name="TInput">Type of ingoing data.</typeparam>
+    /// <typeparam name="TOutput">Type of outgoing data.</typeparam>
+    public class RowMultiplication<TInput, TOutput> : DataFlowTransformation<TInput, TOutput>, ILoggableTask, IDataFlowTransformation<TInput, TOutput>
     {
-        /* ITask Interface */
-        public override string TaskName { get; set; } = $"Duplicate rows.";
+        #region Public properties
 
-        /* Public Properties */
+        /// <inheritdoc/>
+        public override string TaskName { get; set; } = $"Duplicate rows";
+        /// <inheritdoc/>
         public override ISourceBlock<TOutput> SourceBlock => TransformBlock;
+        /// <inheritdoc/>
         public override ITargetBlock<TInput> TargetBlock => TransformBlock;
+
+        /// <summary>
+        /// The transformation func that produces multiple rows for each ingoing row.
+        /// </summary>
         public Func<TInput, IEnumerable<TOutput>> MultiplicationFunc { get; set; }
 
+        #endregion
 
-        /* Private stuff */
-        TransformManyBlock<TInput, TOutput> TransformBlock { get; set; }
-
-        internal ErrorHandler ErrorHandler { get; set; } = new ErrorHandler();
+        #region Constructors
 
         public RowMultiplication()
         {
-            InitBufferObjects();
+
         }
 
+        /// <param name="multiplicationFunc">Sets the <see cref="MultiplicationFunc"/></param>
         public RowMultiplication(Func<TInput, IEnumerable<TOutput>> multiplicationFunc) : this()
         {
             MultiplicationFunc = multiplicationFunc;
         }
 
-        protected override void InitBufferObjects()
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void InternalInitBufferObjects()
         {
             TransformBlock = new TransformManyBlock<TInput, TOutput>(MultiplicateRow, new ExecutionDataflowBlockOptions()
             {
@@ -46,8 +55,21 @@ namespace ETLBox.DataFlow.Transformations
             });
         }
 
+        protected override void CleanUpOnSuccess() {
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        #endregion
+
+        #region Implementation
+
+        TransformManyBlock<TInput, TOutput> TransformBlock { get; set; }
+
         private IEnumerable<TOutput> MultiplicateRow(TInput row)
         {
+            NLogStartOnce();
             if (row == null) return null;
             try
             {
@@ -55,21 +77,15 @@ namespace ETLBox.DataFlow.Transformations
             }
             catch (Exception e)
             {
-                if (!ErrorHandler.HasErrorBuffer) throw e;
-                ErrorHandler.Send(e, ErrorHandler.ConvertErrorData<TInput>(row));
-                return null;
+                ThrowOrRedirectError(e, ErrorSource.ConvertErrorData<TInput>(row));
+                return default;
             }
         }
 
-        public void LinkErrorTo(IDataFlowLinkTarget<ETLBoxError> target)
-            => ErrorHandler.LinkErrorTo(target, TransformBlock.Completion);
-
+        #endregion
     }
 
-    /// <summary>
-    /// This transformation allow you to transform your input data into multple output data records.
-    /// </summary>
-    /// <see cref="RowMultiplication{TInput, TOutput}"/>
+    /// <inheritdoc/>
     public class RowMultiplication : RowMultiplication<ExpandoObject, ExpandoObject>
     {
         public RowMultiplication() : base()

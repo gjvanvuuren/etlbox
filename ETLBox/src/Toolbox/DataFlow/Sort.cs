@@ -8,9 +8,10 @@ using System.Threading.Tasks.Dataflow;
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// Sort the input with the given sort function.
+    /// Sort the incoming data with the given sort function.
+    /// This is a blocking transformation - no output will be produced until all input data has arrived in the transformation.
     /// </summary>
-    /// <typeparam name="TInput">Type of input data (equal type of output data).</typeparam>
+    /// <typeparam name="TInput">Type of ingoing (and also outgoing) data.</typeparam>
     /// <example>
     /// <code>
     /// Comparison&lt;MyDataRow&gt; comp = new Comparison&lt;MyDataRow&gt;(
@@ -19,55 +20,79 @@ namespace ETLBox.DataFlow.Transformations
     /// Sort&lt;MyDataRow&gt; block = new Sort&lt;MyDataRow&gt;(comp);
     /// </code>
     /// </example>
-    public class Sort<TInput> : DataFlowTransformation<TInput, TInput>, ITask, IDataFlowTransformation<TInput, TInput>
+    public class Sort<TInput> : DataFlowTransformation<TInput, TInput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = "Sort";
 
-        /* Public Properties */
+        /// <summary>
+        /// A System.Comparison used to sort the data.
+        /// </summary>
+        public Comparison<TInput> SortFunction { get; set; }
 
-        public Comparison<TInput> SortFunction
-        {
-            get { return _sortFunction; }
-            set
-            {
-                _sortFunction = value;
-                InitBufferObjects();
-            }
-        }
-
+        /// <inheritdoc/>
         public override ISourceBlock<TInput> SourceBlock => BlockTransformation.SourceBlock;
+        /// <inheritdoc/>
         public override ITargetBlock<TInput> TargetBlock => BlockTransformation.TargetBlock;
 
-        /* Private stuff */
-        Comparison<TInput> _sortFunction;
-        BlockTransformation<TInput, TInput> BlockTransformation { get; set; }
+        public new int MaxBufferSize => -1;
+
+        #endregion
+
+        #region Constructors
+
         public Sort()
         {
-            NLogger = NLog.LogManager.GetLogger("ETL");
+            BlockTransformation = new BlockTransformation<TInput, TInput>(SortByFunc);
         }
 
+        /// <param name="sortFunction">Will set the <see cref="SortFunction"/></param>
         public Sort(Comparison<TInput> sortFunction) : this()
         {
             SortFunction = sortFunction;
         }
 
-        protected override void InitBufferObjects()
+
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void InternalInitBufferObjects()
         {
-            BlockTransformation = new BlockTransformation<TInput, TInput>(this, SortByFunc);
-            if (MaxBufferSize > 0) BlockTransformation.MaxBufferSize = this.MaxBufferSize;
+            BlockTransformation.CopyLogTaskProperties(this);
+            BlockTransformation.MaxBufferSize = -1; //Blocking transformation
+            BlockTransformation.InitBufferObjects();
         }
+
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+        internal override void CompleteBufferOnPredecessorCompletion() => BlockTransformation.CompleteBufferOnPredecessorCompletion();
+
+        internal override void FaultBufferOnPredecessorCompletion(Exception e) => BlockTransformation.FaultBufferOnPredecessorCompletion(e);
+
+        #endregion
+
+        #region Implementation
+
+        BlockTransformation<TInput, TInput> BlockTransformation { get; set; }
 
         List<TInput> SortByFunc(List<TInput> data)
         {
             data.Sort(SortFunction);
             return data;
         }
+
+        #endregion
+
     }
 
-    /// <summary>
-    /// Sort the input with the given sort function. The non generic implementation works with a dyanmic object.
-    /// </summary>
+    /// <inheritdoc/>
     public class Sort : Sort<ExpandoObject>
     {
         public Sort() : base()

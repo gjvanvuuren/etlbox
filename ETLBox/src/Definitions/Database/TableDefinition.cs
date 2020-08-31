@@ -8,26 +8,27 @@ using System.Linq;
 
 namespace ETLBox.ControlFlow
 {
+    /// <summary>
+    /// A definition for a table in a database
+    /// </summary>
     public class TableDefinition
     {
+        /// <summary>
+        /// The name of the table
+        /// </summary>
         public string Name { get; set; }
+
+        /// <summary>
+        /// The columns of the table
+        /// </summary>
         public List<TableColumn> Columns { get; set; }
+
+        /// <summary>
+        /// The constraint name for the primary key
+        /// </summary>
         public string PrimaryKeyConstraintName { get; set; }
 
-        public int? IDColumnIndex
-        {
-            get
-            {
-                TableColumn idCol = Columns.FirstOrDefault(col => col.IsIdentity);
-                if (idCol != null)
-                    return Columns.IndexOf(idCol);
-                else
-                    return null;
-            }
-        }
-
-        public string AllColumnsWithoutIdentity => Columns.Where(col => !col.IsIdentity).AsString();
-
+        #region Constructors
 
         public TableDefinition()
         {
@@ -44,10 +45,37 @@ namespace ETLBox.ControlFlow
             Columns = columns;
         }
 
+        #endregion
+
+        internal int? IDColumnIndex
+        {
+            get
+            {
+                TableColumn idCol = Columns.FirstOrDefault(col => col.IsIdentity);
+                if (idCol != null)
+                    return Columns.IndexOf(idCol);
+                else
+                    return null;
+            }
+        }
+
+        /// <summary>
+        /// Uses the CreateTableTask to create a table based on the current definition.
+        /// </summary>
         public void CreateTable() => CreateTableTask.Create(this);
 
+        /// <summary>
+        /// Uses the CreateTableTask to create a table based on the current definition.
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
         public void CreateTable(IConnectionManager connectionManager) => CreateTableTask.Create(connectionManager, this);
 
+        /// <summary>
+        /// Gather a table definition from an existing table in the database.
+        /// </summary>
+        /// <param name="connectionManager">The connection manager of the database you want to connect</param>
+        /// <param name="tableName">A name of an existing table in the database</param>
+        /// <returns></returns>
         public static TableDefinition FromTableName(IConnectionManager connection, string tableName)
         {
             IfTableOrViewExistsTask.ThrowExceptionIfNotExists(connection, tableName);
@@ -75,7 +103,7 @@ namespace ETLBox.ControlFlow
             TableDefinition result = new TableDefinition(TN.ObjectName);
             TableColumn curCol = null;
 
-            var readMetaSql = new SqlTask($"Read column meta data for table {TN.ObjectName}",
+            var readMetaSql = new SqlTask(
 $@"
 SELECT  cols.name
      , CASE WHEN tpes.name IN ('varchar','char','binary','varbinary') 
@@ -153,7 +181,8 @@ ORDER BY cols.column_id
              )
             {
                 DisableLogging = true,
-                ConnectionManager = connection
+                ConnectionManager = connection,
+                TaskName = $"Read column meta data for table {TN.ObjectName}"
             };
             readMetaSql.ExecuteReader();
             return result;
@@ -163,7 +192,7 @@ ORDER BY cols.column_id
         {
             TableDefinition result = new TableDefinition(TN.ObjectName);
             TableColumn curCol = null;
-            var readMetaSql = new SqlTask($"Read column meta data for table {TN.ObjectName}",
+            var readMetaSql = new SqlTask(
         $@"PRAGMA table_info(""{TN.UnquotatedFullName}"")"
             , () => { curCol = new TableColumn(); }
             , () => { result.Columns.Add(curCol); }
@@ -176,7 +205,8 @@ ORDER BY cols.column_id
              )
             {
                 DisableLogging = true,
-                ConnectionManager = connection
+                ConnectionManager = connection,
+                TaskName = $"Read column meta data for table {TN.ObjectName}"
             };
             readMetaSql.ExecuteReader();
             return result;
@@ -187,7 +217,7 @@ ORDER BY cols.column_id
             TableDefinition result = new TableDefinition(TN.ObjectName);
             TableColumn curCol = null;
 
-            var readMetaSql = new SqlTask($"Read column meta data for table {TN.ObjectName}",
+            var readMetaSql = new SqlTask(
 $@" 
 SELECT cols.column_name
   , CASE WHEN cols.data_type IN ('varchar','char') THEN CONCAT (cols.data_type,'(',cols.character_maximum_length, ')')
@@ -230,7 +260,8 @@ ORDER BY cols.ordinal_position
              )
             {
                 DisableLogging = true,
-                ConnectionManager = connection
+                ConnectionManager = connection,
+                TaskName = $"Read column meta data for table {TN.ObjectName}"
             };
             readMetaSql.ExecuteReader();
             return result;
@@ -241,7 +272,7 @@ ORDER BY cols.ordinal_position
             TableDefinition result = new TableDefinition(TN.ObjectName);
             TableColumn curCol = null;
 
-            var readMetaSql = new SqlTask($"Read column meta data for table {TN.ObjectName}",
+            var readMetaSql = new SqlTask(
 $@" 
 SELECT cols.column_name
 ,CASE 
@@ -306,7 +337,8 @@ ORDER BY cols.ordinal_position
              )
             {
                 DisableLogging = true,
-                ConnectionManager = connection
+                ConnectionManager = connection,
+                TaskName = $"Read column meta data for table {TN.ObjectName}"
             };
             readMetaSql.ExecuteReader();
             return result;
@@ -357,7 +389,7 @@ AND ( cols.TABLE_NAME  = '{TN.UnquotatedFullName}'
     )
 ORDER BY cols.COLUMN_ID
 ";
-            var readMetaSql = new SqlTask($"Read column meta data for table {TN.ObjectName}",
+            var readMetaSql = new SqlTask(
 sql
             , () => { curCol = new TableColumn(); }
             , () => { result.Columns.Add(curCol); }
@@ -372,7 +404,8 @@ sql
              )
             {
                 DisableLogging = true,
-                ConnectionManager = connection
+                ConnectionManager = connection,
+                TaskName = $"Read column meta data for table {TN.ObjectName}"
             };
             readMetaSql.ExecuteReader();
             return result;

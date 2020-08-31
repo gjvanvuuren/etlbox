@@ -3,15 +3,15 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using ETLBox.Helper;
 
 namespace ETLBox.DataFlow
 {
-    public abstract class DataFlowStreamSource<TOutput> : DataFlowSource<TOutput>
+    public abstract class DataFlowStreamSource<TOutput> : DataFlowExecutableSource<TOutput>, IDataFlowStreamSource<TOutput>
     {
-        /* Public properties */
-        /// <summary>
-        /// The Url of the webservice (e.g. https://test.com/foo) or the file name (relative or absolute)
-        /// </summary>
+        #region Public properties
+
+        /// <inheritdoc/>
         public string Uri
         {
             get
@@ -25,24 +25,77 @@ namespace ETLBox.DataFlow
                 HasNextUri = c => false;
             }
         }
+        private string _uri;
 
+        /// <inheritdoc/>
         public Func<StreamMetaData, string> GetNextUri { get; set; }
+
+        /// <inheritdoc/>
         public Func<StreamMetaData, bool> HasNextUri { get; set; }
 
-        /// <summary>
-        /// Specifies the resource type. By default requests are made with HttpClient.
-        /// Specify ResourceType.File if you want to read from a json file.
-        /// </summary>
+        /// <inheritdoc/>
         public ResourceType ResourceType { get; set; }
 
+        /// <inheritdoc/>
         public HttpClient HttpClient { get; set; } = new HttpClient();
 
-        /* Internal properties */
-        protected string _uri;
+        /// <inheritdoc/>
+        public HttpRequestMessage HttpRequestMessage { get; set; } = new HttpRequestMessage();
+
+        #endregion
+
+        #region Internal properties
+
         protected string CurrentRequestUri { get; set; }
         protected StreamReader StreamReader { get; set; }
-        private bool WasStreamOpened { get; set; }
         protected StringBuilder UnparsedData { get; set; }
+
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void OnExecutionDoSynchronousWork()
+        {
+
+        }
+
+        protected override void OnExecutionDoAsyncWork()
+        {
+            NLogStartOnce();
+            do
+            {
+                CurrentRequestUri = GetNextUri(CreateMetaDataObject);
+                OpenStream(CurrentRequestUri);
+                InitReader();
+                WasStreamOpened = true;
+                ReadAllRecords();
+            } while (HasNextUri(CreateMetaDataObject));
+        }
+
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+            CloseStreamsIfOpen();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) {
+            CloseStreamsIfOpen();
+        }
+
+        #endregion
+
+        #region Implementation
+
+        private bool WasStreamOpened;
+
+        private void CloseStreamsIfOpen()
+        {
+            if (WasStreamOpened)
+            {
+                CloseReader();
+                CloseStream();
+            }
+        }
 
         private StreamMetaData CreateMetaDataObject =>
                 new StreamMetaData()
@@ -51,39 +104,21 @@ namespace ETLBox.DataFlow
                     UnparsedData = UnparsedData?.ToString()
                 };
 
-        public override void Execute()
-        {
-            NLogStart();
-            try
-            {
-                do
-                {
-                    CurrentRequestUri = GetNextUri(CreateMetaDataObject);
-                    OpenStream(CurrentRequestUri);
-                    InitReader();
-                    WasStreamOpened = true;
-                    ReadAll();
-                } while (HasNextUri(CreateMetaDataObject));
-                Buffer.Complete();
-            }
-            finally
-            {
-                if (WasStreamOpened)
-                {
-                    CloseReader();
-                    CloseStream();
-                }
-            }
-            NLogFinish();
-        }
 
         private void OpenStream(string uri)
         {
             if (ResourceType == ResourceType.File)
                 StreamReader = new StreamReader(uri);
             else
-                StreamReader = new StreamReader(HttpClient.GetStreamAsync(new Uri(uri)).Result);
+            {
+                var message = HttpRequestMessage.Clone();
+                message.RequestUri =  new Uri(uri);
+                var response = HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead).Result;
+                response.EnsureSuccessStatusCode();
+                StreamReader = new StreamReader(response.Content.ReadAsStreamAsync().Result);
+            }
         }
+
 
         private void CloseStream()
         {
@@ -92,13 +127,9 @@ namespace ETLBox.DataFlow
         }
 
         protected abstract void InitReader();
-        protected abstract void ReadAll();
+        protected abstract void ReadAllRecords();
         protected abstract void CloseReader();
-    }
 
-    public class StreamMetaData
-    {
-        public int ProgressCount { get; set; }
-        public string UnparsedData { get; set; }
+        #endregion
     }
 }

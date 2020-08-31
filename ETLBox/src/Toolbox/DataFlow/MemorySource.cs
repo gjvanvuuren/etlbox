@@ -1,21 +1,31 @@
 ﻿using ETLBox.ControlFlow;
+using ETLBox.Exceptions;
+using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 namespace ETLBox.DataFlow.Connectors
 {
+
     /// <summary>
-    /// Reads data from a memory source. While reading the data from the list, data is also asnychronously posted into the targets.
-    /// Data is read a as string from the source and dynamically converted into the corresponding data format.
+    /// Define a source based on a generic .NET collection. This could be a List&lt;T&gt; or any other IEnumerable&lt;T&gt;.
+    /// By default, an empty List&lt;T&gt; is created which can be filled with data.
     /// </summary>
-    public class MemorySource<TOutput> : DataFlowSource<TOutput>, ITask, IDataFlowSource<TOutput>
+    /// <typeparam name="TOutput">Type of outgoing data.</typeparam>
+    public class MemorySource<TOutput> : DataFlowExecutableSource<TOutput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName => $"Read data from memory";
 
-        /* Public properties */
+        /// The .NET collection that is used to read the data from.
         public IEnumerable<TOutput> Data { get; set; }
+
+        /// If the source collection implements IList&lt;T&gt; then this property will convert the collection into this interface type.
         public IList<TOutput> DataAsList
         {
             get
@@ -27,44 +37,59 @@ namespace ETLBox.DataFlow.Connectors
                 Data = value;
             }
         }
-        /* Private stuff */
+
+        #endregion
+
+        #region Constructors
 
         public MemorySource()
         {
             Data = new List<TOutput>();
         }
 
+        /// <param name="data">Set the source collection and stores it in <see cref="Data"/></param>
         public MemorySource(IEnumerable<TOutput> data)
         {
             Data = data;
         }
 
-        public override void Execute()
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void OnExecutionDoSynchronousWork() { }
+
+        protected override void OnExecutionDoAsyncWork()
         {
-            NLogStart();
-            ReadRecordAndSendIntoBuffer();
-            LogProgress();
-            Buffer.Complete();
-            NLogFinish();
+            NLogStartOnce();
+            ReadAllRecords();
         }
 
-        private void ReadRecordAndSendIntoBuffer()
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        #endregion
+
+        #region Implementation
+
+        private void ReadAllRecords()
         {
             foreach (TOutput record in Data)
             {
-                Buffer.SendAsync(record).Wait();
+                if (!Buffer.SendAsync(record).Result)
+                    throw new ETLBoxException("Buffer already completed or faulted!", this.Exception);
                 LogProgress();
             }
         }
 
+        #endregion
     }
 
-    /// <summary>
-    /// Reads data from a memory source. While reading the data from the file, data is also asnychronously posted into the targets.
-    /// MemorySource as a nongeneric type always return a dynamic object as output. If you need typed output, use
-    /// the MemorySource&lt;TOutput&gt; object instead.
-    /// </summary>
-    /// <see cref="MemorySource{TOutput}"/>
+    /// <inheritdoc/>
     public class MemorySource : MemorySource<ExpandoObject>
     {
         public MemorySource() : base() { }

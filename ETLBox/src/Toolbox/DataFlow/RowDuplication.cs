@@ -8,48 +8,68 @@ using System.Threading.Tasks.Dataflow;
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// Creates one or more duplicates of your incoming rows.
+    /// Creates one or more duplicates of your incoming row.
     /// </summary>
-    /// <typeparam name="TInput">Type of data input</typeparam>
-    public class RowDuplication<TInput> : DataFlowTransformation<TInput, TInput>, ITask, IDataFlowTransformation<TInput, TInput>
+    /// <typeparam name="TInput">Type of ingoing data.</typeparam>
+    public class RowDuplication<TInput> : DataFlowTransformation<TInput, TInput>, ILoggableTask, IDataFlowTransformation<TInput, TInput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = $"Duplicate rows.";
 
-        /* Public Properties */
+        /// <summary>
+        /// Number of duplicates to be created for each ingoing row.
+        /// Default is 1 (meaning the incoming row plus one copy).
+        /// </summary>
         public int NumberOfDuplicates { get; set; } = 1;
+
+        /// <summary>
+        /// A predicate that describe if a will be duplicated or not.
+        /// </summary>
         public Predicate<TInput> CanDuplicate { get; set; }
+
+        /// <inheritdoc/>
         public override ISourceBlock<TInput> SourceBlock => TransformBlock;
+
+        /// <inheritdoc/>
         public override ITargetBlock<TInput> TargetBlock => TransformBlock;
 
-        /* Private stuff */
-        TransformManyBlock<TInput, TInput> TransformBlock { get; set; }
-        ObjectCopy<TInput> ObjectCopy { get; set; }
-        TypeInfo TypeInfo { get; set; }
+        #endregion
+
+        #region Constructors
 
         public RowDuplication()
         {
             TypeInfo = new TypeInfo(typeof(TInput)).GatherTypeInfo();
             ObjectCopy = new ObjectCopy<TInput>(TypeInfo);
-            InitBufferObjects();
         }
 
+        /// <param name="numberOfDuplicates">Sets the <see cref="NumberOfDuplicates"/></param>
         public RowDuplication(int numberOfDuplicates) : this()
         {
             this.NumberOfDuplicates = numberOfDuplicates;
         }
 
+        /// <param name="canDuplicate">Sets the <see cref="CanDuplicate"/> predicate</param>
+        /// <param name="numberOfDuplicates">Sets the <see cref="NumberOfDuplicates"/></param>
         public RowDuplication(Predicate<TInput> canDuplicate, int numberOfDuplicates) : this(numberOfDuplicates)
         {
             this.CanDuplicate = canDuplicate;
         }
 
+        /// <param name="canDuplicate">Sets the <see cref="CanDuplicate"/> predicate</param>
         public RowDuplication(Predicate<TInput> canDuplicate) : this()
         {
             this.CanDuplicate = canDuplicate;
         }
 
-        protected override void InitBufferObjects()
+
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void InternalInitBufferObjects()
         {
             TransformBlock = new TransformManyBlock<TInput, TInput>(DuplicateRow, new ExecutionDataflowBlockOptions()
             {
@@ -57,8 +77,24 @@ namespace ETLBox.DataFlow.Transformations
             });
         }
 
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        #endregion
+
+        #region Implementation
+
+        TransformManyBlock<TInput, TInput> TransformBlock;
+        ObjectCopy<TInput> ObjectCopy;
+        TypeInfo TypeInfo;
+
         private IEnumerable<TInput> DuplicateRow(TInput row)
         {
+            NLogStartOnce();
             if (row == null) return null;
             List<TInput> result = new List<TInput>(NumberOfDuplicates);
             result.Add(row);
@@ -74,13 +110,11 @@ namespace ETLBox.DataFlow.Transformations
             }
             return result;
         }
+
+        #endregion
     }
 
-    /// <summary>
-    /// Creates one or more duplicates of your incoming rows.
-    /// The non generic implementation works with dynamic object.
-    /// </summary>
-    /// <see cref="RowDuplication{TInput}"/>
+    /// <inheritdoc />
     public class RowDuplication : RowDuplication<ExpandoObject>
     {
         public RowDuplication() : base()

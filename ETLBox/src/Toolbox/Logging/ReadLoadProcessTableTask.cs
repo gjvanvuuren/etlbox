@@ -10,7 +10,7 @@ namespace ETLBox.Logging
     /// <summary>
     /// Read load processes by Id, all processes or last finished/successful/aborted.
     /// </summary>
-    public class ReadLoadProcessTableTask : GenericTask, ITask
+    public class ReadLoadProcessTableTask : ControlFlowTask
     {
         /* ITask Interface */
         public override string TaskName => $"Read load processes by Id, all processes or last finished/successful/aborted.";
@@ -43,12 +43,12 @@ namespace ETLBox.Logging
         }
 
         /* Public properties */
-        public long? _loadProcessId;
+        long? _loadProcessId;
         public long? LoadProcessId
         {
             get
             {
-                return _loadProcessId ?? ControlFlow.ControlFlow.CurrentLoadProcess?.Id;
+                return _loadProcessId ?? Logging.CurrentLoadProcess?.Id;
             }
             set
             {
@@ -59,7 +59,7 @@ namespace ETLBox.Logging
         public List<LoadProcess> AllLoadProcesses { get; set; }
 
         public LoadProcess LastFinished { get; private set; }
-        public LoadProcess LastTransfered { get; private set; }
+        public LoadProcess LastTransferred { get; private set; }
         public ReadOptions ReadOption { get; set; } = ReadOptions.ReadSingleProcess;
 
         public string Sql
@@ -117,7 +117,7 @@ ORDER BY {QB}end_date{QE} DESC, {QB}id{QE} DESC";
             }
         }
 
-        ObjectNameDescriptor TN => new ObjectNameDescriptor(ControlFlow.ControlFlow.LoadProcessTable, QB, QE);
+        ObjectNameDescriptor TN => new ObjectNameDescriptor(Logging.LoadProcessTable, QB, QE);
 
         public ReadLoadProcessTableTask()
         {
@@ -128,9 +128,10 @@ ORDER BY {QB}end_date{QE} DESC, {QB}id{QE} DESC";
             this.LoadProcessId = loadProcessId;
         }
 
-        public ReadLoadProcessTableTask(ITask callingTask, long? loadProcessId) : this(loadProcessId)
+        internal ReadLoadProcessTableTask(ControlFlowTask callingTask, long? loadProcessId) : this(loadProcessId)
         {
-            this.CopyTaskProperties(callingTask);
+            this.CopyLogTaskProperties(callingTask);
+            this.ConnectionManager = callingTask.ConnectionManager;
         }
 
         public static LoadProcess Read(long? loadProcessId)

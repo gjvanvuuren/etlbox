@@ -5,108 +5,153 @@ using ETLBox.Helper;
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Linq;
 using System.Threading.Tasks.Dataflow;
 
 
 namespace ETLBox.DataFlow.Transformations
 {
     /// <summary>
-    /// A lookup task - data from the input can be enriched with data retrieved from the lookup source.
+    /// A lookup task - incoming rows can be enriched with data retrieved from the lookup source.
+    /// For each rows that comes in, a matching records is search for in the lookup source. If one is found,
+    /// the missing properties are filled with values from the source.
+    /// Data is read from the lookup source when the first rows arrives in the LookupTransformation.
     /// </summary>
-    /// <typeparam name="TInput">Type of data input and output</typeparam>
-    /// <typeparam name="TSourceOutput">Type of lookup data</typeparam>
-    public class LookupTransformation<TInput, TSourceOutput>
-        : DataFlowTransformation<TInput, TInput>, ITask, IDataFlowTransformation<TInput, TInput>
+    /// <typeparam name="TInput">Type of ingoing and outgoing data.</typeparam>
+    /// <typeparam name="TSourceOutput">Type of data used in the lookup source.</typeparam>
+    public class LookupTransformation<TInput, TSourceOutput> : DataFlowTransformation<TInput, TInput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = "Lookup";
-        public List<TSourceOutput> LookupData { get; set; } = new List<TSourceOutput>();
 
-        /* Public Properties */
+        /// <summary>
+        /// Holds the data read from the lookup source. This data is used to find data that is missing in the incoming rows.
+        /// </summary>
+        public List<TSourceOutput> LookupData
+        {
+            get
+            {
+                return LookupBuffer.Data as List<TSourceOutput>;
+            }
+            set
+            {
+                LookupBuffer.Data = value;
+            }
+        }
+
+        /// <inheritdoc/>
         public override ISourceBlock<TInput> SourceBlock => RowTransformation.SourceBlock;
+
+        /// <inheritdoc/>
         public override ITargetBlock<TInput> TargetBlock => RowTransformation.TargetBlock;
-        public IDataFlowSource<TSourceOutput> Source
-        {
-            get
-            {
-                return _source;
-            }
-            set
-            {
-                _source = value;
-                Source.LinkTo(LookupBuffer);
-            }
-        }
+        /// <summary>
+        /// The source component from which the lookup data is retrieved. E.g. a <see cref="DbSource"/> or a <see cref="MemorySource"/>.
+        /// </summary>
+        public IDataFlowExecutableSource<TSourceOutput> Source { get; set; }
 
-        public Func<TInput, TInput> TransformationFunc
-        {
-            get
-            {
-                return _rowTransformationFunc;
-            }
-            set
-            {
-                _rowTransformationFunc = value;
-                InitRowTransformation(LoadLookupData);
-            }
-        }
+        /// <summary>
+        /// A transformation func that describes how the ingoing data can be enriched with the already pre-read data from
+        /// the <see cref="Source"/>
+        /// </summary>
+        public Func<TInput, TInput> TransformationFunc { get; set; }
 
-        /* Private stuff */
-        CustomDestination<TSourceOutput> LookupBuffer { get; set; }
-        RowTransformation<TInput, TInput> RowTransformation { get; set; }
-        Func<TInput, TInput> _rowTransformationFunc;
-        IDataFlowSource<TSourceOutput> _source;
-        LookupTypeInfo TypeInfo { get; set; }
+        #endregion
+
+        #region Constructors
 
         public LookupTransformation()
         {
-            LookupBuffer = new CustomDestination<TSourceOutput>(this, FillBuffer);
-            DefaultInitWithMatchRetrieveAttributes();
+            LookupBuffer = new MemoryDestination<TSourceOutput>();
+            RowTransformation = new RowTransformation<TInput, TInput>();
         }
 
-        public LookupTransformation(IDataFlowSource<TSourceOutput> lookupSource) : this()
+        /// <param name="lookupSource">Sets the <see cref="Source"/> of the lookup.</param>
+        public LookupTransformation(IDataFlowExecutableSource<TSourceOutput> lookupSource) : this()
         {
             Source = lookupSource;
         }
 
-        public LookupTransformation(IDataFlowSource<TSourceOutput> lookupSource, Func<TInput, TInput> transformationFunc)
+        /// <param name="lookupSource">Sets the <see cref="Source"/> of the lookup.</param>
+        /// <param name="transformationFunc">Sets the <see cref="TransformationFunc"/></param>
+        public LookupTransformation(IDataFlowExecutableSource<TSourceOutput> lookupSource, Func<TInput, TInput> transformationFunc)
             : this(lookupSource)
         {
             TransformationFunc = transformationFunc;
         }
 
-        public LookupTransformation(IDataFlowSource<TSourceOutput> lookupSource, Func<TInput, TInput> transformationFunc, List<TSourceOutput> lookupList)
+        /// <param name="lookupSource">Sets the <see cref="Source"/> of the lookup.</param>
+        /// <param name="transformationFunc">Sets the <see cref="TransformationFunc"/></param>
+        /// <param name="lookupList">Sets the list for the <see cref="LookupData"/></param>
+        public LookupTransformation(IDataFlowExecutableSource<TSourceOutput> lookupSource, Func<TInput, TInput> transformationFunc, List<TSourceOutput> lookupList)
             : this(lookupSource, transformationFunc)
         {
             LookupData = lookupList;
         }
 
-        protected override void InitBufferObjects()
+        #endregion
+
+        #region Implement abstract methods
+
+        protected override void InternalInitBufferObjects()
         {
-            if (MaxBufferSize > 0) RowTransformation.MaxBufferSize = this.MaxBufferSize;
+            if (TransformationFunc == null)
+                DefaultFuncWithMatchRetrieveAttributes();
+            InitRowTransformationManually(LoadLookupData);
+
+            LinkInternalLoadBufferFlow();
         }
 
-        private void InitRowTransformation(Action initAction)
+        protected override void CleanUpOnSuccess()
         {
-            RowTransformation = new RowTransformation<TInput, TInput>(this, _rowTransformationFunc);
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        internal override void CompleteBufferOnPredecessorCompletion() => RowTransformation.CompleteBufferOnPredecessorCompletion();
+
+        internal override void FaultBufferOnPredecessorCompletion(Exception e) => RowTransformation.FaultBufferOnPredecessorCompletion(e);
+
+        public new IDataFlowSource<ETLBoxError> LinkErrorTo(IDataFlowDestination<ETLBoxError> target)
+        {
+            var errorSource = InternalLinkErrorTo(target);
+            RowTransformation.ErrorSource = new ErrorSource() { Redirection = this.ErrorSource };
+            Source.ErrorSource = new ErrorSource() { Redirection = this.ErrorSource };
+            return errorSource;
+        }
+
+        #endregion
+
+        #region Implementation
+
+        MemoryDestination<TSourceOutput> LookupBuffer ;
+        RowTransformation<TInput, TInput> RowTransformation;
+        LookupTypeInfo TypeInfo;
+
+        private void InitRowTransformationManually(Action initAction)
+        {
+            RowTransformation.TransformationFunc = TransformationFunc;
+            RowTransformation.CopyLogTaskProperties(this);
             RowTransformation.InitAction = initAction;
+            RowTransformation.MaxBufferSize = this.MaxBufferSize;
+            RowTransformation.InitBufferObjects();
         }
 
-        private void DefaultInitWithMatchRetrieveAttributes()
+        private void LinkInternalLoadBufferFlow()
         {
-            _rowTransformationFunc = row => FindRowByAttributes(row);
-            InitRowTransformation(() =>
-            {
-                ReadAndCheckTypeInfo();
-                LoadLookupData();
-            });
+            if (Source == null) throw new ETLBoxException("You need to define a lookup source before using a LookupTransformation in a data flow");
+            LookupBuffer.CopyLogTaskProperties(this);
+            Source.LinkTo(LookupBuffer);
         }
 
-        private void ReadAndCheckTypeInfo()
+        private void DefaultFuncWithMatchRetrieveAttributes()
         {
             TypeInfo = new LookupTypeInfo(typeof(TInput), typeof(TSourceOutput));
             if (TypeInfo.MatchColumns.Count == 0 || TypeInfo.RetrieveColumns.Count == 0)
                 throw new ETLBoxException("Please define either a transformation function or use the MatchColumn / RetrieveColumn attributes.");
+            TransformationFunc = FindRowByAttributes;
         }
 
         private TInput FindRowByAttributes(TInput row)
@@ -134,54 +179,30 @@ namespace ETLBox.DataFlow.Transformations
 
         private void LoadLookupData()
         {
-            CheckLookupObjects();
-            try
-            {
-                Source.Execute();
-                LookupBuffer.Wait();
-            }
-            catch (Exception e)
-            {
-                throw e;
-            }
+            NLogStartOnce();
+            Source.Execute();
+            LookupBuffer.Wait();
         }
 
-        private void CheckLookupObjects()
-        {
-            if (Source == null) throw new ETLBoxException("You need to define a lookup source before using a LookupTransformation in a data flow");
-        }
+        #endregion
 
-        private void FillBuffer(TSourceOutput sourceRow)
-        {
-            if (LookupData == null) LookupData = new List<TSourceOutput>();
-            LookupData.Add(sourceRow);
-        }
-
-        public void LinkLookupSourceErrorTo(IDataFlowLinkTarget<ETLBoxError> target) =>
-            Source.LinkErrorTo(target);
-
-        public void LinkLookupTransformationErrorTo(IDataFlowLinkTarget<ETLBoxError> target) =>
-            RowTransformation.LinkErrorTo(target);
     }
 
-    /// <summary>
-    /// A lookup task - data from the input can be enriched with data retrieved from the lookup source.
-    /// The non generic implementation uses a dynamic object as input and lookup source.
-    /// </summary>
+    /// <inheritdoc/>
     public class LookupTransformation : LookupTransformation<ExpandoObject, ExpandoObject>
     {
         public LookupTransformation() : base()
         { }
 
-        public LookupTransformation(IDataFlowSource<ExpandoObject> lookupSource)
+        public LookupTransformation(IDataFlowExecutableSource<ExpandoObject> lookupSource)
             : base(lookupSource)
         { }
 
-        public LookupTransformation(IDataFlowSource<ExpandoObject> lookupSource, Func<ExpandoObject, ExpandoObject> transformationFunc)
+        public LookupTransformation(IDataFlowExecutableSource<ExpandoObject> lookupSource, Func<ExpandoObject, ExpandoObject> transformationFunc)
             : base(lookupSource, transformationFunc)
         { }
 
-        public LookupTransformation(IDataFlowSource<ExpandoObject> lookupSource, Func<ExpandoObject, ExpandoObject> transformationFunc, List<ExpandoObject> lookupList)
+        public LookupTransformation(IDataFlowExecutableSource<ExpandoObject> lookupSource, Func<ExpandoObject, ExpandoObject> transformationFunc, List<ExpandoObject> lookupList)
             : base(lookupSource, transformationFunc, lookupList)
         { }
     }

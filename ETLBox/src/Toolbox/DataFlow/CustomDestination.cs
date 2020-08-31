@@ -6,66 +6,63 @@ using System.Threading.Tasks.Dataflow;
 namespace ETLBox.DataFlow.Connectors
 {
     /// <summary>
-    /// Define your own destination block.
+    /// Define your own destination block. This block accepts all data from the flow and sends it to your custom written Action.
     /// </summary>
-    /// <typeparam name="TInput">Type of datasource input.</typeparam>
-    public class CustomDestination<TInput> : DataFlowDestination<TInput>, ITask, IDataFlowDestination<TInput>
+    /// <typeparam name="TInput">Type of ingoing data.</typeparam>
+    public class CustomDestination<TInput> : DataFlowDestination<TInput>
     {
-        /* ITask Interface */
+        #region Public properties
+
+        /// <inheritdoc/>
         public override string TaskName { get; set; } = $"Write data into custom target";
+        /// <summary>
+        /// Each row that the CustomDestination receives is send into this Action.
+        /// </summary>
+        public Action<TInput> WriteAction { get; set; }
 
-        /* Public properties */
-        public Action<TInput> WriteAction
-        {
-            get
-            {
-                return _writeAction;
-            }
-            set
-            {
-                _writeAction = value;
-                InitBufferObjects();
-            }
-        }
+        #endregion
 
-        /* Private stuff */
-        private Action<TInput> _writeAction;
+        #region Constructros
 
         public CustomDestination()
         {
 
         }
 
+        /// <param name="writeAction">Sets the <see cref="WriteAction"/></param>
         public CustomDestination(Action<TInput> writeAction) : this()
         {
             WriteAction = writeAction;
         }
 
-        internal CustomDestination(ITask callingTask, Action<TInput> writeAction) : this(writeAction)
-        {
-            CopyTaskProperties(callingTask);
-        }
+        #endregion
 
-        public CustomDestination(string taskName, Action<TInput> writeAction) : this(writeAction)
-        {
-            this.TaskName = taskName;
-        }
+        #region Implement abstract methods
 
-        protected override void InitBufferObjects()
+        protected override void InternalInitBufferObjects()
         {
             TargetAction = new ActionBlock<TInput>(AddLoggingAndErrorHandling(WriteAction), new ExecutionDataflowBlockOptions()
             {
                 BoundedCapacity = MaxBufferSize
             });
-            SetCompletionTask();
         }
+
+        protected override void CleanUpOnSuccess()
+        {
+            NLogFinishOnce();
+        }
+        protected override void CleanUpOnFaulted(Exception e) { }
+
+        #endregion
+
+        #region Implementation
 
         private Action<TInput> AddLoggingAndErrorHandling(Action<TInput> writeAction)
         {
             return new Action<TInput>(
                 input =>
                 {
-                    if (ProgressCount == 0) NLogStart();
+                    NLogStartOnce();
                     try
                     {
                         if (input != null)
@@ -73,22 +70,23 @@ namespace ETLBox.DataFlow.Connectors
                     }
                     catch (Exception e)
                     {
-                        if (!ErrorHandler.HasErrorBuffer) throw e;
-                        ErrorHandler.Send(e, ErrorHandler.ConvertErrorData<TInput>(input));
+                        ThrowOrRedirectError(e, ErrorSource.ConvertErrorData<TInput>(input));
                     }
                     LogProgress();
                 });
         }
+
+        #endregion
     }
 
-    /// <summary>
-    /// Define your own destination block. The non generic implementation uses a dynamic object as input.
-    /// </summary>
+    /// <inheritdoc/>
     public class CustomDestination : CustomDestination<ExpandoObject>
     {
+        /// <inheritdoc/>
         public CustomDestination() : base()
         { }
 
+        /// <inheritdoc/>
         public CustomDestination(Action<ExpandoObject> writeAction) : base(writeAction)
         { }
     }

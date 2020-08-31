@@ -5,40 +5,58 @@ using System.Threading.Tasks.Dataflow;
 
 namespace ETLBox.DataFlow
 {
-    public abstract class DataFlowStreamDestination<TInput> : DataFlowDestination<TInput>
+    /// <summary>
+    /// The base implementation for a destination that allows writing of data in a stream.
+    /// </summary>
+    /// <typeparam name="TInput">Type of ingoing data</typeparam>
+    public abstract class DataFlowStreamDestination<TInput> : DataFlowDestination<TInput>, IDataFlowStreamDestination<TInput>
     {
-        /* Public properties */
-        /// <summary>
-        /// The Url of the webservice (e.g. https://test.com/foo) or the file name (relative or absolute)
-        /// </summary>
+        #region Public properties
+
+        /// <inheritdoc/>
         public string Uri { get; set; }
 
-        /// <summary>
-        /// Specifies the resourc type. ResourceType.
-        /// Specify ResourceType.File if you want to write into a file.
-        /// </summary>
+        /// <inheritdoc/>
         public ResourceType ResourceType { get; set; }
 
-        protected StreamWriter StreamWriter { get; set; }
+        /// <inheritdoc/>
         public HttpClient HttpClient { get; set; } = new HttpClient();
 
-        protected void InitTargetAction()
-        {
-            InitBufferObjects();
-        }
+        #endregion
 
-        protected override void InitBufferObjects()
+        #region Implement abstract methods
+
+        protected override void InternalInitBufferObjects()
         {
             TargetAction = new ActionBlock<TInput>(WriteData, new ExecutionDataflowBlockOptions()
             {
                 MaxDegreeOfParallelism = 1,
-                BoundedCapacity = MaxBufferSize
+                BoundedCapacity = MaxBufferSize,
             });
-            SetCompletionTask();
         }
+
+        protected override void CleanUpOnSuccess()
+        {
+            CloseStream();
+            StreamWriter?.Close();
+            NLogFinishOnce();
+        }
+
+        protected override void CleanUpOnFaulted(Exception e)
+        {
+            CloseStream();
+            StreamWriter?.Close();
+        }
+
+        #endregion
+
+        #region Implementation template
+
+        protected StreamWriter StreamWriter { get; set; }
 
         protected void WriteData(TInput data)
         {
+            NLogStartOnce();
             if (StreamWriter == null)
             {
                 CreateStreamWriterByResourceType();
@@ -55,16 +73,10 @@ namespace ETLBox.DataFlow
                 StreamWriter = new StreamWriter(HttpClient.GetStreamAsync(new Uri(Uri)).Result);
         }
 
-        protected override void CleanUp()
-        {
-            CloseStream();
-            StreamWriter?.Close();
-            OnCompletion?.Invoke();
-            NLogFinish();
-        }
-
         protected abstract void InitStream();
         protected abstract void WriteIntoStream(TInput data);
         protected abstract void CloseStream();
+
+        #endregion
     }
 }

@@ -6,10 +6,11 @@ namespace ETLBox.Logging
     /// <summary>
     /// A custom task allows you to run your own code (defined as an Action object), with additionally logging in place. (TaskType: CUSTOM)
     /// </summary>
-    public class CustomTask : GenericTask, ITask
+    public class CustomTask : ControlFlowTask
     {
-        /* ITask interface */
+        /// <inheritdoc/>
         public override string TaskName { get; set; }
+
         public void Execute()
         {
             throw new Exception("A custom task can't be used without an Action!");
@@ -55,13 +56,13 @@ namespace ETLBox.Logging
         void NLogStart()
         {
             if (!DisableLogging)
-                NLogger.Info(TaskName, TaskType, "START", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
+                NLogger.Info(TaskName, TaskType, "START", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
         }
 
         void NLogFinish()
         {
             if (!DisableLogging)
-                NLogger.Info(TaskName, TaskType, "END", TaskHash, ControlFlow.ControlFlow.STAGE, ControlFlow.ControlFlow.CurrentLoadProcess?.Id);
+                NLogger.Info(TaskName, TaskType, "END", TaskHash, Logging.STAGE, Logging.CurrentLoadProcess?.Id);
         }
 
 
